@@ -21,6 +21,7 @@
  * `job.log`'s optional `progress: true` flag (an in-place tqdm redraw) is
  * forwarded as `onProgress`'s second argument.
  */
+import yaml from "js-yaml";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type {
@@ -32,6 +33,7 @@ import type {
 } from "@/lib/sleapConnect";
 import { APP_VERSION } from "@/lib/version";
 import { isTauri } from "@/platform/index";
+import { hydraQuote } from "@/platform/trainingArgs";
 import type { AgentInfo } from "@/lib/protocolV1/envelope";
 import type {
   FsListResult,
@@ -444,6 +446,32 @@ function isMultiModelTrainSpec(
     Array.isArray(spec.config_contents) &&
     spec.config_contents.length > 1
   );
+}
+
+/**
+ * Copies a single-config train job's YAML `trainer_config.run_name` onto the
+ * spec's `run_name`. Without it the worker falls back to the model type and
+ * passes `trainer_config.run_name=<model_type>` on the sleap-nn command line,
+ * which overrides the YAML and drops the `<ts>.<model>.n=<N>` name this app
+ * resolved (sleap-connect `jobs/builder.py`'s `build_train_command`). The
+ * worker interpolates the value unquoted, so it's sent Hydra-quoted — the `=`
+ * in `n=<N>` is otherwise an override parse error — the same quoting local
+ * training applies (`trainingArgs.ts`). Applied to each job as it's sent, so
+ * it holds after a multi-model spec is split. An explicit `run_name` is never
+ * overridden.
+ */
+export function withYamlRunName(spec: JobSpec): JobSpec {
+  if (spec.type !== "train" || spec.run_name || spec.config_contents?.length !== 1) return spec;
+  try {
+    const parsed = yaml.load(spec.config_contents[0]) as
+      | { trainer_config?: { run_name?: unknown } }
+      | null
+      | undefined;
+    const runName = parsed?.trainer_config?.run_name;
+    return typeof runName === "string" && runName ? { ...spec, run_name: hydraQuote(runName) } : spec;
+  } catch {
+    return spec;
+  }
 }
 
 /** What to dial: `url` is a ws address, or the encoded iroh target for `"iroh"`. */
@@ -868,7 +896,7 @@ async function submitSingleJob(
   set: ConnectSet,
   onTelemetry?: (telemetry: JobTelemetry) => void,
 ): Promise<JobResult> {
-  const { jobId } = await client.jobsSubmit(spec as unknown as Record<string, unknown>);
+  const { jobId } = await client.jobsSubmit(withYamlRunName(spec) as unknown as Record<string, unknown>);
   const tracked: TrackedJob = {
     workerId,
     jobId,
@@ -1508,7 +1536,9 @@ export const useConnectStore = create<ConnectState>()(
         };
 
         const submitTracked = async (oneSpec: JobSpec): Promise<string> => {
-          const { jobId } = await client.jobsSubmit(oneSpec as unknown as Record<string, unknown>);
+          const { jobId } = await client.jobsSubmit(
+            withYamlRunName(oneSpec) as unknown as Record<string, unknown>,
+          );
           const tracked: TrackedJob = {
             workerId,
             jobId,
