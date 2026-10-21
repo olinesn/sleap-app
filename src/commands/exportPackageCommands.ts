@@ -59,6 +59,7 @@ import type { Command } from "./types";
 import type { CommandContext } from "./CommandContext";
 import { saveBytesFile } from "./fileCommands";
 import { toast } from "@/lib/notify";
+import { useAppStore } from "@/stores/appStore";
 
 /** The three PyQt package levels. */
 export type ExportPackageLevel = "user" | "training" | "full";
@@ -99,16 +100,19 @@ function frameKey(labels: Labels, video: Video, frameIdx: number): string {
   return `${labels.videos.indexOf(video)}:${frameIdx}`;
 }
 
-/** Level 1 count: user-labeled frames only. */
+/**
+ * Level 1 count: user-labeled frames only — any user labeling, negative
+ * (background) frames included, as sleap-io's `user_labeled_frames`.
+ */
 export function countUserFrames(labels: Labels): number {
-  return labels.labeledFrames.filter((f) => f.hasUserInstances).length;
+  return labels.labeledFrames.filter((f) => f.isUserLabeled).length;
 }
 
 /** Level 2 count: user-labeled frames + suggestion frames not already labeled. */
 export function countTrainingFrames(labels: Labels): number {
   const seen = new Set<string>();
   for (const f of labels.labeledFrames) {
-    if (f.hasUserInstances) seen.add(frameKey(labels, f.video, f.frameIdx));
+    if (f.isUserLabeled) seen.add(frameKey(labels, f.video, f.frameIdx));
   }
   for (const s of labels.suggestions) {
     seen.add(frameKey(labels, s.video, s.frameIdx));
@@ -128,11 +132,14 @@ export function countFullFrames(labels: Labels): number {
   return seen.size;
 }
 
-/** Indices into `labels.labeledFrames` of the user-labeled frames. */
+/**
+ * Indices into `labels.labeledFrames` of the user-labeled frames (negative
+ * frames included, so `embed: "user"` can embed their images like sleap-io).
+ */
 function userLabeledFrameIndices(labels: Labels): number[] {
   const inds: number[] = [];
   labels.labeledFrames.forEach((f, i) => {
-    if (f.hasUserInstances) inds.push(i);
+    if (f.isUserLabeled) inds.push(i);
   });
   return inds;
 }
@@ -214,7 +221,26 @@ export async function exportLabelsPackage(
     // are dropped for user/training) BEFORE serializing — `embed` alone would
     // still write every frame's metadata. See the module doc (FRAME SELECTION).
     const exportLabels = labelsForLevel(labels, level);
-    const bytes = await saveSlpToBytes(exportLabels, { embed: mode });
+    // Reading + encoding each frame image from a continuous video takes a
+    // while (~0.5 s/frame for an mp4), so show the progress overlay meanwhile.
+    // `onProgress` is io >= the release with pinned embed reads; older io
+    // ignores it (the overlay then just shows the message). Built as a variable
+    // so it type-checks against either pinned io version.
+    const { setLoading } = useAppStore.getState();
+    setLoading(true, "Embedding frames…", 0);
+    const saveOptions = {
+      embed: mode,
+      onProgress: (current: number, total: number) => {
+        const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+        setLoading(true, `Embedding frames (${current}/${total})`, pct);
+      },
+    };
+    let bytes: Uint8Array;
+    try {
+      bytes = await saveSlpToBytes(exportLabels, saveOptions);
+    } finally {
+      setLoading(false);
+    }
     const suggestedName = derivePackageFilename(filename);
     const saved = await saveBytesFile(bytes, suggestedName, {
       name: "SLEAP Labels Package",

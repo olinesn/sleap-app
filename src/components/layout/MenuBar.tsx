@@ -12,6 +12,7 @@ import { isTauri } from "../../lib/platform";
 import { APP_VERSION, APP_VERSION_KIND_LABEL } from "@/lib/version";
 import { getDocsUrl } from "@/lib/docsUrl";
 import { formatShortcut } from "@/lib/formatShortcut";
+import { DEFAULT_SHORTCUTS } from "@/lib/shortcuts";
 
 async function openExternal(url: string) {
   if (isTauri) {
@@ -47,7 +48,6 @@ import {
   GoToMarkedFrame,
   GoNextTrackSpawnFrame,
   AddInstance,
-  ToggleNegativeFrame,
   DeleteSelectedInstance,
   CopyInstance,
   PasteInstance,
@@ -95,6 +95,7 @@ import {
   type Reduction,
 } from "@/lib/statisticSeries";
 import { requestStartTutorial } from "@/lib/tutorial/startTutorial";
+import { requestToggleNegativeFrame } from "@/lib/negativeFrame";
 
 export function MenuBar() {
   return (
@@ -767,7 +768,7 @@ function ViewMenu() {
             }
           }}
         >
-          Node Placement Mode <MenubarShortcut>N</MenubarShortcut>
+          Node Placement Mode <MenubarShortcut>{formatShortcut(DEFAULT_SHORTCUTS["toggle place mode"])}</MenubarShortcut>
         </MenubarCheckboxItem>
         <MenubarSeparator />
         <MenubarSub>
@@ -1055,9 +1056,9 @@ function LabelsMenu() {
         <MenubarCheckboxItem
           disabled={!projectLoaded}
           checked={labeledFrame?.isNegative ?? false}
-          onClick={() => exec(ToggleNegativeFrame)}
+          onClick={() => void requestToggleNegativeFrame()}
         >
-          Mark Frame as Negative
+          Mark Frame as Negative <MenubarShortcut>{formatShortcut(DEFAULT_SHORTCUTS["mark negative"])}</MenubarShortcut>
         </MenubarCheckboxItem>
         <MenubarSeparator />
         <MenubarItem
