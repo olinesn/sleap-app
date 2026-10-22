@@ -590,6 +590,9 @@ interface TrainingState {
   startedAt: number | null;
   _stopRequested: boolean;
   _isRemote: boolean;
+  /** The remote run's id (every job of it, training and post-training
+   *  inference, shares it), so Stop Early / Cancel end exactly this run. */
+  _remoteRunId: string | null;
 
   // Progress
   models: ModelProgress[];
@@ -1218,6 +1221,7 @@ const initialState = {
   startedAt: null as number | null,
   _stopRequested: false,
   _isRemote: false,
+  _remoteRunId: null,
   models: [] as ModelProgress[],
   currentModelIndex: 0,
   wandbUrl: null as string | null,
@@ -1662,6 +1666,7 @@ export const useTrainingStore = create<TrainingState>()((set, get) => ({
       startedAt: Date.now(),
       _stopRequested: false,
       _isRemote: !!remoteOpts?.remote,
+      _remoteRunId: remoteOpts?.remote ? crypto.randomUUID() : null,
       models,
       currentModelIndex: 0,
       wandbUrl: null,
@@ -1856,6 +1861,7 @@ export const useTrainingStore = create<TrainingState>()((set, get) => ({
       try {
         const trainResults: JobResult[] = [];
         const result = await submitJob(spec, onLogLine, {
+          ...(get()._remoteRunId ? { run: { id: get()._remoteRunId as string } } : {}),
           onTelemetry: (telemetry, jobIndex) => get().applyRemoteTelemetry(jobIndex, telemetry),
           onModelComplete: (modelResult) => {
             trainResults.push(modelResult);
@@ -1882,6 +1888,9 @@ export const useTrainingStore = create<TrainingState>()((set, get) => ({
         logFlusher.flush();
 
         if (!result.success) {
+          // The user's own Cancel already set "Training cancelled"; the run
+          // ending is that cancel landing, not a failure to report.
+          if (get().error === "Training cancelled") return;
           const message = result.error || "Training failed";
           set((s) => ({
             status: "error",
@@ -2012,9 +2021,18 @@ export const useTrainingStore = create<TrainingState>()((set, get) => ({
               }));
             } catch (e) {
               logFlusher.flush();
-              const message = `Post-training inference failed: ${e instanceof Error ? e.message : String(e)}`;
+              // The user's own Cancel ended the inference job: not a failure.
+              const canceled = get().error === "Training cancelled";
+              const message = canceled
+                ? "Post-training inference canceled"
+                : `Post-training inference failed: ${e instanceof Error ? e.message : String(e)}`;
               set((s) => ({
-                postTrainingInference: { status: "error", message, pendingMerge: null, merged: false },
+                postTrainingInference: {
+                  status: canceled ? "skipped" : "error",
+                  message,
+                  pendingMerge: null,
+                  merged: false,
+                },
                 log: appendLog(s.log, `— ${message}`),
               }));
             }
@@ -2492,7 +2510,7 @@ export const useTrainingStore = create<TrainingState>()((set, get) => ({
       // Remote: jobs.cancel(mode: "stop") for graceful early stop
       const { useConnectStore } = await import("@/stores/connectStore");
       const { stopJob } = useConnectStore.getState();
-      stopJob();
+      stopJob(get()._remoteRunId ?? undefined);
       set((s) => ({
         log: appendLog(s.log, "— Stop Early requested, saving checkpoint..."),
       }));
@@ -2519,7 +2537,7 @@ export const useTrainingStore = create<TrainingState>()((set, get) => ({
       // Remote: jobs.cancel(mode: "cancel")
       const { useConnectStore } = await import("@/stores/connectStore");
       const { cancelJob } = useConnectStore.getState();
-      cancelJob();
+      cancelJob(get()._remoteRunId ?? undefined);
     } else {
       // Local: kill subprocess
       await cancelCommand();
