@@ -5,6 +5,7 @@ import { irohTransportAvailable, transportLabel, type TransportKind } from "@/li
 import { useConnectStore } from "@/stores/connectStore";
 import { useAppStore } from "@/stores/appStore";
 import { PairWorkerForm } from "@/components/connect/PairWorkerForm";
+import { forgetWorkerWithConfirm } from "@/components/connect/forgetWorker";
 
 export function ConnectPanel() {
   const setConnectWindowOpen = useAppStore((s) => s.setConnectWindowOpen);
@@ -15,7 +16,6 @@ export function ConnectPanel() {
   const activeTransport = useConnectStore((s) => s.activeTransport);
   const connectToWorker = useConnectStore((s) => s.connectToWorker);
   const disconnect = useConnectStore((s) => s.disconnect);
-  const forgetWorker = useConnectStore((s) => s.forgetWorker);
 
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [showPairForm, setShowPairForm] = useState(pairedWorkers.length === 0);
@@ -107,7 +107,7 @@ export function ConnectPanel() {
                     size="xs"
                     className="ml-auto h-5 w-5 p-0 text-muted-foreground hover:text-red-400"
                     title="Forget this worker"
-                    onClick={() => forgetWorker(w.nodeId)}
+                    onClick={() => void forgetWorkerWithConfirm(w.nodeId)}
                   >
                     <Trash2 className="h-3 w-3" />
                   </Button>
@@ -118,6 +118,11 @@ export function ConnectPanel() {
                 {isConnected && activeTransport && (
                   <div className="text-[10px] text-muted-foreground mt-0.5">
                     Connected via {transportLabel(activeTransport)}
+                  </div>
+                )}
+                {w.unpairedAt && (
+                  <div className="text-[10px] text-red-400 mt-0.5">
+                    Unpaired by this worker — re-pair with a new code to use it again.
                   </div>
                 )}
                 {isReconnecting && (
