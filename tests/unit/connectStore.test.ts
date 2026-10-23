@@ -7,6 +7,7 @@ import {
   capTrackedJobs,
   migrateConnectPersisted,
   resubscribeWorker,
+  syncDeviceNameFromStorage,
   __resetManagedConnections,
   __setManagedDeps,
 } from "@/stores/connectStore";
@@ -95,7 +96,19 @@ class FakeWorkerClient {
   private _seq = 0;
   private _closeListeners = new Set<(info: { intentional: boolean; error?: unknown }) => void>();
 
-  constructor(public opts: { url: string; createSocket?: (url: string) => unknown }) {
+  clientsRenameCalls: string[] = [];
+
+  async clientsRename(name: string) {
+    this.clientsRenameCalls.push(name);
+  }
+
+  constructor(
+    public opts: {
+      url: string;
+      createSocket?: (url: string) => unknown;
+      agent?: { device_name?: string };
+    },
+  ) {
     this.mountsResult = FakeWorkerClient.nextMounts;
     this.peerNodeId = FakeWorkerClient.nextPeerNodeId;
     FakeWorkerClient.instances.push(this);
@@ -340,6 +353,7 @@ describe("connectStore", () => {
       pairedWorkers: [],
       selectedWorkerId: null,
       trackedJobs: [],
+      deviceName: null,
       connectionStatus: "disconnected",
       connectionError: null,
       workerMounts: [],
@@ -940,6 +954,68 @@ describe("connectStore", () => {
         ["/mnt", 0],
         ["/mnt", 1],
       ]);
+    });
+  });
+
+  describe("device name", () => {
+    const OTHER_WORKER: PairedWorker = {
+      nodeId: "other-worker-id",
+      label: "Other",
+      addrs: ["ws://10.0.0.6:9631"],
+      pairedAt: "2026-09-27T00:00:00Z",
+    };
+
+    beforeEach(() => {
+      useConnectStore.setState({ pairedWorkers: [OTHER_WORKER] });
+      FakeWorkerClient.nextPeerNodeId = OTHER_WORKER.nodeId;
+    });
+
+    it("sends the chosen name in the hello agent", async () => {
+      useConnectStore.setState({ deviceName: "Bench PC" });
+      await useConnectStore.getState().clientFor(OTHER_WORKER.nodeId);
+      expect(lastClient().opts.agent?.device_name).toBe("Bench PC");
+    });
+
+    it("sends a default name when none is chosen", async () => {
+      await useConnectStore.getState().clientFor(OTHER_WORKER.nodeId);
+      expect(lastClient().opts.agent?.device_name).toBeTruthy();
+    });
+
+    it("setDeviceName saves the trimmed name and pushes it to connected workers", async () => {
+      await useConnectStore.getState().clientFor(OTHER_WORKER.nodeId);
+      await useConnectStore.getState().setDeviceName("  Lab   Mac ");
+      expect(useConnectStore.getState().deviceName).toBe("Lab Mac");
+      expect(lastClient().clientsRenameCalls).toEqual(["Lab Mac"]);
+    });
+
+    it("a rename in another tab updates this tab and pushes it to this tab's workers", async () => {
+      useConnectStore.setState({ deviceName: "Old" });
+      await useConnectStore.getState().clientFor(OTHER_WORKER.nodeId);
+      syncDeviceNameFromStorage(JSON.stringify({ state: { deviceName: "New" }, version: 2 }));
+      expect(useConnectStore.getState().deviceName).toBe("New");
+      await Promise.resolve();
+      expect(lastClient().clientsRenameCalls).toEqual(["New"]);
+      // The next hello carries it too.
+      __resetManagedConnections();
+      await useConnectStore.getState().clientFor(OTHER_WORKER.nodeId);
+      expect(lastClient().opts.agent?.device_name).toBe("New");
+    });
+
+    it("ignores storage writes that don't change the name, or aren't parseable", async () => {
+      useConnectStore.setState({ deviceName: "Same" });
+      await useConnectStore.getState().clientFor(OTHER_WORKER.nodeId);
+      syncDeviceNameFromStorage(JSON.stringify({ state: { deviceName: "Same" } }));
+      syncDeviceNameFromStorage("not json");
+      syncDeviceNameFromStorage(null);
+      await Promise.resolve();
+      expect(useConnectStore.getState().deviceName).toBe("Same");
+      expect(lastClient().clientsRenameCalls).toEqual([]);
+    });
+
+    it("setDeviceName ignores a blank name", async () => {
+      useConnectStore.setState({ deviceName: "Keep" });
+      await useConnectStore.getState().setDeviceName("   ");
+      expect(useConnectStore.getState().deviceName).toBe("Keep");
     });
   });
 
