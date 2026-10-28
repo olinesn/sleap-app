@@ -87,8 +87,10 @@ function adjustScale(delta: number) {
 
 /** The curated command registry. Built once; each `run` reads fresh state. */
 function buildActions(): MenuAction[] {
-  const exec = (cmd: Parameters<typeof commandContext.execute>[0]) => () =>
-    commandContext.execute(cmd);
+  const exec = (
+    cmd: Parameters<typeof commandContext.execute>[0],
+    params?: Parameters<typeof commandContext.execute>[1]
+  ) => () => commandContext.execute(cmd, params);
   const store = () => useAppStore.getState();
 
   return [
@@ -102,10 +104,13 @@ function buildActions(): MenuAction[] {
     { group: "File", label: "Import DeepLabCut dataset", run: exec(ImportDlcCommand) },
     { group: "File", label: "Import Analysis HDF5", run: exec(ImportAnalysisH5Command) },
     { group: "File", label: "Export JSON", run: exec(ExportJsonCommand) },
-    { group: "File", label: "Export Analysis CSV", run: exec(ExportCSVCommand) },
-    { group: "File", label: "Export Analysis HDF5", run: exec(ExportAnalysisH5Command) },
+    { group: "File", label: "Export Analysis CSV (Current Video)", run: exec(ExportCSVCommand) },
+    { group: "File", label: "Export Analysis CSV (All Videos)", run: exec(ExportCSVCommand, { allVideos: true }) },
+    { group: "File", label: "Export Analysis HDF5 (Current Video)", run: exec(ExportAnalysisH5Command) },
+    { group: "File", label: "Export Analysis HDF5 (All Videos)", run: exec(ExportAnalysisH5Command, { allVideos: true }) },
     { group: "File", label: "Export NWB (ndx-pose)", run: exec(ExportNwbCommand) },
-    { group: "File", label: "Export Labels Package", run: exec(ExportPackageCommand) },
+    { group: "File", label: "Export Labels Package (.pkg.slp)", run: () => store().setExportPackageDialogOpen(true) },
+    { group: "File", label: "Export JSON Package", run: exec(ExportPackageCommand) },
     { group: "File", label: "Export Labeled Clip (Video)", run: () => store().setExportClipDialogOpen(true) },
 
     // Edit
@@ -154,6 +159,9 @@ function buildActions(): MenuAction[] {
     { group: "Labels", label: "Accept All Predictions on Current Frame", shortcut: formatShortcut("$mod+Shift+KeyA"), run: exec(AddInstancesFromAllPredictions) },
     { group: "Labels", label: "Accept All Predictions (Project)", run: exec(AddInstancesFromAllPredictionsInProject) },
     { group: "Labels", label: "Delete Predictions...", run: () => store().setDeletePredictionsDialogOpen(true) },
+    // Without a seekbar range, the dialog says to select one first.
+    { group: "Labels", label: "Extract Clip and Labels", run: () => store().setExtractClipDialog("clip") },
+    { group: "Labels", label: "Extract Clip Labels Package", run: () => store().setExtractClipDialog("package") },
     { group: "Labels", label: "Mark Frame as Negative", shortcut: formatShortcut("KeyN"), run: () => void requestToggleNegativeFrame() },
 
     // Tracks

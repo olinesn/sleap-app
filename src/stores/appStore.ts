@@ -463,6 +463,11 @@ export interface AppState {
    * (e.g. "Locating videos…"), so the bar holds rather than jumping back.
    */
   loadingProgress: number;
+  /**
+   * When set, the loading overlay shows a Cancel button that calls it (e.g.
+   * Export Labels Package). Cleared when the overlay is dismissed.
+   */
+  loadingCancel: (() => void) | null;
 
   // === Dialog state ===
   inferenceDialogOpen: boolean;
@@ -476,13 +481,14 @@ export interface AppState {
   /** A file is being dragged over the app window (drives the drop-catcher overlay). */
   windowDragActive: boolean;
   addVideoUrlDialogOpen: boolean;
-  exportDialogOpen: boolean;
   exportClipDialogOpen: boolean;
   modelMetricsDialogOpen: boolean;
   sizeDistributionDialogOpen: boolean;
   labelQcDialogOpen: boolean;
   overlayModelsDialogOpen: boolean;
   exportPackageDialogOpen: boolean;
+  /** Labels → Extract Clip options dialog: which variant is open, if any. */
+  extractClipDialog: "clip" | "package" | null;
   shortcutsDialogOpen: boolean;
   labelingTipsDialogOpen: boolean;
   helpDialogOpen: boolean;
@@ -586,6 +592,7 @@ export interface AppState {
   /** Migrate a track's color override across a rename (called by SetTrackName). */
   renameTrackColor: (oldName: string, newName: string) => void;
   setLoading: (loading: boolean, message?: string, progress?: number) => void;
+  setLoadingCancel: (cancel: (() => void) | null) => void;
   setInferenceDialogOpen: (open: boolean) => void;
   setNewProjectDialogOpen: (open: boolean) => void;
   setGoToFrameDialogOpen: (open: boolean) => void;
@@ -595,13 +602,13 @@ export interface AppState {
   setMergeProjectSeedPath: (path: string | null) => void;
   setWindowDragActive: (active: boolean) => void;
   setAddVideoUrlDialogOpen: (open: boolean) => void;
-  setExportDialogOpen: (open: boolean) => void;
   setExportClipDialogOpen: (open: boolean) => void;
   setModelMetricsDialogOpen: (open: boolean) => void;
   setSizeDistributionDialogOpen: (open: boolean) => void;
   setLabelQcDialogOpen: (open: boolean) => void;
   setOverlayModelsDialogOpen: (open: boolean) => void;
   setExportPackageDialogOpen: (open: boolean) => void;
+  setExtractClipDialog: (variant: "clip" | "package" | null) => void;
   setShortcutsDialogOpen: (open: boolean) => void;
   setLabelingTipsDialogOpen: (open: boolean) => void;
   setHelpDialogOpen: (open: boolean) => void;
@@ -886,6 +893,7 @@ export const useAppStore = create<AppState>()(
       isLoading: false,
       loadingMessage: "",
       loadingProgress: 0,
+      loadingCancel: null,
 
       // Dialog state
       inferenceDialogOpen: false,
@@ -897,13 +905,13 @@ export const useAppStore = create<AppState>()(
       mergeProjectSeedPath: null,
       windowDragActive: false,
       addVideoUrlDialogOpen: false,
-      exportDialogOpen: false,
       exportClipDialogOpen: false,
       modelMetricsDialogOpen: false,
       sizeDistributionDialogOpen: false,
       labelQcDialogOpen: false,
       overlayModelsDialogOpen: false,
       exportPackageDialogOpen: false,
+      extractClipDialog: null,
       shortcutsDialogOpen: false,
       labelingTipsDialogOpen: false,
       helpDialogOpen: false,
@@ -1293,7 +1301,15 @@ export const useAppStore = create<AppState>()(
           // messages without a percent (e.g. "Locating videos…") hold the bar
           // rather than snapping it to 0. Reset once the overlay is dismissed.
           if (progress !== undefined) state.loadingProgress = progress;
-          if (!loading) state.loadingProgress = 0;
+          if (!loading) {
+            state.loadingProgress = 0;
+            state.loadingCancel = null;
+          }
+        }),
+
+      setLoadingCancel: (cancel) =>
+        set((state) => {
+          state.loadingCancel = cancel;
         }),
 
       setInferenceDialogOpen: (open) =>
@@ -1338,11 +1354,6 @@ export const useAppStore = create<AppState>()(
           state.addVideoUrlDialogOpen = open;
         }),
 
-      setExportDialogOpen: (open) =>
-        set((state) => {
-          state.exportDialogOpen = open;
-        }),
-
       setExportClipDialogOpen: (open) =>
         set((state) => {
           state.exportClipDialogOpen = open;
@@ -1371,6 +1382,11 @@ export const useAppStore = create<AppState>()(
       setExportPackageDialogOpen: (open) =>
         set((state) => {
           state.exportPackageDialogOpen = open;
+        }),
+
+      setExtractClipDialog: (variant) =>
+        set((state) => {
+          state.extractClipDialog = variant;
         }),
 
       setShortcutsDialogOpen: (open) =>

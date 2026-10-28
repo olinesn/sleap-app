@@ -18,6 +18,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { PathResolutionDialog } from "../dialogs/PathResolutionDialog";
 import type { ResolvedPath } from "@/lib/pathMappings";
 import { Toaster } from "sonner";
+import { Button } from "@/components/ui/button";
 import { MenuBar } from "./MenuBar";
 import { StatusBar } from "./StatusBar";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -43,13 +44,13 @@ import { DeletePredictionsDialog } from "../dialogs/DeletePredictionsDialog";
 import { MergeProjectDialog } from "../dialogs/MergeProjectDialog";
 import { ExportModelDialog } from "../dialogs/ExportModelDialog";
 import { AddVideoUrlDialog } from "../dialogs/AddVideoUrlDialog";
-import { ExportDialog } from "../dialogs/ExportDialog";
 import { ExportClipDialog } from "../dialogs/ExportClipDialog";
 import { ModelMetricsDialog } from "../dialogs/ModelMetricsDialog";
 import { SizeDistributionDialog } from "../dialogs/SizeDistributionDialog";
 import { LabelQcDialog } from "../dialogs/LabelQcDialog";
 import { OverlayModelsDialog } from "../dialogs/OverlayModelsDialog";
 import { ExportPackageDialog } from "../dialogs/ExportPackageDialog";
+import { ExtractClipDialog } from "../dialogs/ExtractClipDialog";
 import { ShortcutsDialog } from "../dialogs/ShortcutsDialog";
 import { LabelingTipsDialog } from "../dialogs/LabelingTipsDialog";
 import { HelpDialog } from "../dialogs/HelpDialog";
@@ -140,6 +141,7 @@ export function AppShell() {
   const windowDragActive = useAppStore((s) => s.windowDragActive);
   const loadingMessage = useAppStore((s) => s.loadingMessage);
   const loadingProgress = useAppStore((s) => s.loadingProgress);
+  const loadingCancel = useAppStore((s) => s.loadingCancel);
   const sidebarSide = useAppStore((s) => s.sidebarSide);
 
   // Dialog state
@@ -149,8 +151,6 @@ export function AppShell() {
   const setDeletePredictionsDialogOpen = useAppStore(
     (s) => s.setDeletePredictionsDialogOpen
   );
-  const exportDialogOpen = useAppStore((s) => s.exportDialogOpen);
-  const setExportDialogOpen = useAppStore((s) => s.setExportDialogOpen);
   const modelMetricsDialogOpen = useAppStore((s) => s.modelMetricsDialogOpen);
   const setModelMetricsDialogOpen = useAppStore(
     (s) => s.setModelMetricsDialogOpen
@@ -295,6 +295,11 @@ export function AppShell() {
                   {/* Strip the trailing "(NN%)" — the bar shows the number now. */}
                   {loadingMessage.replace(/\s*\(\d+%\)\s*$/, "") || "Loading..."}
                 </p>
+                {loadingCancel && (
+                  <Button variant="outline" size="sm" onClick={loadingCancel}>
+                    Cancel
+                  </Button>
+                )}
               </div>
             </div>
           )}
@@ -334,10 +339,6 @@ export function AppShell() {
         open={deletePredictionsDialogOpen}
         onOpenChange={setDeletePredictionsDialogOpen}
       />
-      <ExportDialog
-        open={exportDialogOpen}
-        onOpenChange={setExportDialogOpen}
-      />
       <ExportClipDialog />
       <ModelMetricsDialog
         open={modelMetricsDialogOpen}
@@ -360,6 +361,7 @@ export function AppShell() {
         open={exportPackageDialogOpen}
         onOpenChange={setExportPackageDialogOpen}
       />
+      <ExtractClipDialog />
       <ShortcutsDialog
         open={shortcutsDialogOpen}
         onOpenChange={setShortcutsDialogOpen}
