@@ -8,6 +8,7 @@ import { commandContext } from "@/commands";
 import { MergePredictions, MergeTracks, type ExistingPredictionsMode } from "@/commands/editCommands";
 import { useAppStore } from "@/stores/appStore";
 import { appendLogLine, subprocessFailureMessage } from "@/lib/processLog";
+import { loadErrorText } from "@/lib/tooNewFile";
 import { buildRemoteTrackSpecs } from "@/lib/remoteTrackSpec";
 
 export interface InferenceProgress {
@@ -471,7 +472,7 @@ export const useInferenceStore = create<InferenceState>()((set) => ({
         } catch (e) {
           set({
             status: "error",
-            error: `Remote inference error: ${e instanceof Error ? e.message : String(e)}`,
+            error: `Remote inference error: ${loadErrorText(e)}`,
           });
         }
         return;
@@ -508,7 +509,7 @@ export const useInferenceStore = create<InferenceState>()((set) => ({
       } catch (e) {
         set({
           status: "error",
-          error: `Remote inference error: ${e instanceof Error ? e.message : String(e)}`,
+          error: `Remote inference error: ${loadErrorText(e)}`,
         });
       }
     } else {
@@ -587,7 +588,7 @@ export const useInferenceStore = create<InferenceState>()((set) => ({
       } catch (e) {
         set({
           status: "error",
-          error: `Failed to start inference: ${e instanceof Error ? e.message : String(e)}`,
+          error: `Failed to start inference: ${loadErrorText(e)}`,
         });
       }
     }
@@ -625,7 +626,7 @@ export const useInferenceStore = create<InferenceState>()((set) => ({
     } catch (e) {
       set({
         status: "error",
-        error: `Failed to load results: ${e instanceof Error ? e.message : String(e)}`,
+        error: `Failed to load results: ${loadErrorText(e)}`,
       });
     }
   },
@@ -652,7 +653,7 @@ export const useInferenceStore = create<InferenceState>()((set) => ({
       // used to force a full job resubmit to recover from what's often just
       // a flaky fetch.
       set({
-        error: `Failed to fetch/merge remote result: ${e instanceof Error ? e.message : String(e)}`,
+        error: `Failed to fetch/merge remote result: ${loadErrorText(e)}`,
       });
     }
   },

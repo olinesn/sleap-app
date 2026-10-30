@@ -36,6 +36,7 @@ import {
 import { downloadFile } from "../../lib/exportUtils";
 import { getPlatform } from "../../platform/index";
 import { toast } from "@/lib/notify";
+import { showTooNewFileToast } from "@/lib/tooNewFile";
 import type { Skeleton } from "@talmolab/sleap-io.js";
 import { ReplaceSkeletonDialog } from "./ReplaceSkeletonDialog";
 import {
@@ -363,9 +364,11 @@ export function SkeletonPanel() {
       }
       newSkeleton = await parseSkeletonFile(filename, data);
     } catch (err) {
-      toast.error("Failed to load skeleton", {
-        description: err instanceof Error ? err.message : String(err),
-      });
+      if (!showTooNewFileToast(err)) {
+        toast.error("Failed to load skeleton", {
+          description: err instanceof Error ? err.message : String(err),
+        });
+      }
       return;
     }
 

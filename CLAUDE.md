@@ -13,6 +13,7 @@ This app makes extensive use of `sleap-io.js` for I/O, data model, SLP file hand
 - Source: https://github.com/talmolab/sleap-io.js
 - Docs: https://iojs.sleap.ai/usage.md, https://iojs.sleap.ai/api.md
 - Can use a local sibling checkout at `../sleap-io.js` (Vite auto-detects). CI uses the published package, not a sibling checkout.
+- A file too new to read: sleap-io.js refuses it with an error named `UnsupportedSlpFormatError` and a message for developers. Anywhere the app shows a failed `.slp` read, use `src/lib/tooNewFile.ts`, which gives the words for app users and goes by the name, so it builds against a sleap-io.js without that class.
 
 ## Commands
 ```

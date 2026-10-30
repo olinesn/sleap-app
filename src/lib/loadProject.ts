@@ -42,6 +42,7 @@ import { installTauriFsResolver } from "./fsResolver";
 import { fileSize, readRange } from "./nativeRange";
 import { sleapCmd } from "./sleapPlugin";
 import { basenameFromUrl } from "./urlOpen";
+import { showTooNewFileToast } from "./tooNewFile";
 
 // Files larger than this open via the B-seam native range reader (lazy, on-disk)
 // instead of reading the whole file into WASM memory. Below it, eager is simpler
@@ -196,8 +197,10 @@ export async function loadProjectFromFile(file: File): Promise<boolean> {
     useEnvironmentStore.getState().checkSleapNnUpdateAndNotify();
     return true;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    toast.error("Failed to load project", { description: msg });
+    if (!showTooNewFileToast(err, file.name)) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error("Failed to load project", { description: msg });
+    }
     console.error("Failed to load project:", err);
     return false;
   } finally {
@@ -249,9 +252,11 @@ export async function loadProjectFromUrl(url: string): Promise<boolean> {
     // redactedCauseSummary — an accurate, credential-scrubbed one-liner — rather
     // than mislabelling everything "network/CORS". Never log the raw URL or raw
     // error: both can carry the access token, so redact on the way out.
-    const msg =
-      err instanceof RemoteIOError ? err.message : redactedCauseSummary(err);
-    toast.error("Failed to open dataset", { description: msg });
+    if (!showTooNewFileToast(err, name)) {
+      const msg =
+        err instanceof RemoteIOError ? err.message : redactedCauseSummary(err);
+      toast.error("Failed to open dataset", { description: msg });
+    }
     console.error(
       "Failed to open dataset from URL:",
       redactUrl(url),
@@ -362,8 +367,10 @@ export async function loadProjectFromPath(
     // resolveExternalVideos above — no separate toast here (avoids a duplicate).
     return true;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    toast.error("Failed to load project", { description: msg });
+    if (!showTooNewFileToast(err, filename)) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error("Failed to load project", { description: msg });
+    }
     console.error("Failed to load project:", err);
     return false;
   } finally {
