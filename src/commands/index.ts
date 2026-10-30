@@ -133,3 +133,15 @@ export {
   OpenSkeletonCommand,
   installSkeletonUndoInterceptor,
 } from "./skeletonCommands";
+
+// Behavior labels (sleap-io events)
+export {
+  LabelBehaviorRange,
+  AddBehavior,
+  UpdateBehavior,
+  RemoveBehavior,
+  DeleteBout,
+  EditBout,
+  AcceptPrediction,
+  RejectPrediction,
+} from "./behaviorCommands";

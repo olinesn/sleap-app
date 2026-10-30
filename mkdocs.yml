@@ -133,6 +133,7 @@ nav:
           - Navigation: guides/navigation.md
           - Suggestions: guides/suggestions.md
           - Tracks: guides/tracks.md
+          - Behavior Labeling: guides/behavior.md
       - Videos & Display:
           - Videos: guides/videos.md
           - View & Display: guides/view.md

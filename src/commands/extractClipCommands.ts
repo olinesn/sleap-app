@@ -24,6 +24,7 @@ import {
   Video,
   saveSlpToBytes,
 } from "@talmolab/sleap-io.js";
+import { eventsForClip } from "@/lib/behaviorEvents";
 import type { Command } from "./types";
 import type { CommandContext } from "./CommandContext";
 import {
@@ -113,13 +114,26 @@ export function labelsForRange(
         ? new SuggestionFrame({ video: clip, frameIdx: s.frameIdx - shift, group: s.group })
         : s
     );
+  // Behavior labels over the range go with the clip, as its own frames count.
+  const tracks = subset?.tracks ?? [];
+  const { eventTypes, events } = eventsForClip(
+    labels,
+    video,
+    range.start,
+    range.end,
+    target,
+    shift,
+    tracks,
+  );
   return new Labels({
     labeledFrames: frames,
     videos: [target],
     skeletons: labels.skeletons,
-    tracks: subset?.tracks ?? [],
+    tracks,
     suggestions,
     provenance: { ...labels.provenance },
+    eventTypes,
+    events,
   });
 }
 

@@ -60,6 +60,7 @@ import {
   peekSeries,
   putSeries,
 } from "@/lib/seriesCache";
+import { BehaviorBand } from "./BehaviorBand";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -1411,6 +1412,8 @@ export function Seekbar() {
           </div>
         </div>
       )}
+
+      <BehaviorBand totalFrames={totalFrames} controlsOrder={controlsOrder} />
 
       {/* `relative` keeps this row painted above the bands above it. */}
       <div className="relative grid grid-cols-subgrid col-span-full items-center h-12 bg-card border-t border-border px-2 gap-2">

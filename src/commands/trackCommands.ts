@@ -10,6 +10,7 @@ import { UpdateTopic } from "../types";
 import type { Command } from "./types";
 import type { CommandContext } from "./CommandContext";
 import { useAppStore } from "../stores/appStore";
+import { swapAnimalsInRange } from "@/lib/behaviorEvents";
 
 /**
  * Swap `oldTrack`<->`newTrack` across `frames` (assumed already sorted by
@@ -23,7 +24,8 @@ function applyTrackSwapForward(
   frames: LabeledFrame[],
   oldTrack: Track,
   newTrack: Track,
-): void {
+): number | null {
+  let last: number | null = null;
   for (const lf of frames) {
     const matchingInstances = lf.instances.filter((inst) => inst.track === oldTrack);
     if (matchingInstances.length === 0) break; // oldTrack not found — stop propagation
@@ -32,7 +34,26 @@ function applyTrackSwapForward(
     const reverseInstances = lf.instances.filter((inst) => inst.track === newTrack);
     for (const inst of matchingInstances) inst.track = newTrack;
     for (const inst of reverseInstances) inst.track = oldTrack;
+    last = lf.frameIdx;
   }
+  return last;
+}
+
+/**
+ * The bouts on two tracks follow a swap that ran from `from` to frame `last`: behavior
+ * labels describe the animal, so they move with it when an identity switch is fixed.
+ * Covered by the swap command's own snapshot (it holds the events too).
+ */
+function swapBoutsWithTracks(
+  ctx: CommandContext,
+  oldTrack: Track,
+  newTrack: Track,
+  from: number,
+  last: number | null,
+): void {
+  const { labels, video } = ctx.state;
+  if (!labels || !video || last === null) return;
+  swapAnimalsInRange(labels, video, oldTrack, newTrack, from, last);
 }
 
 /** Create a new Track and assign it to the selected instance. */
@@ -93,7 +114,8 @@ export const SetInstanceTrack: Command = {
         maxFrameIdx,
       );
       ctx.pushUndoSnapshot(snapshot);
-      applyTrackSwapForward(videoFrames, oldTrack, newTrack);
+      const last = applyTrackSwapForward(videoFrames, oldTrack, newTrack);
+      swapBoutsWithTracks(ctx, oldTrack, newTrack, frameIdx, last);
     } else {
       // Single-frame assignment. `skipAutoSnapshot` is set so the propagate
       // branch above can manage its own scoped snapshot; take the
@@ -185,11 +207,12 @@ export const TransposeInstances: Command = {
     second.track = tempTrack;
 
     if (propagate) {
-      applyTrackSwapForward(
+      const last = applyTrackSwapForward(
         videoFrames.filter((lf) => lf.frameIdx > frameIdx),
         oldTrack,
         newTrack,
       );
+      swapBoutsWithTracks(ctx, oldTrack, newTrack, frameIdx, last ?? frameIdx);
     }
 
     ctx.state.markChanged();
@@ -446,7 +469,8 @@ export const PropagateTrackLabels: Command = {
     );
     ctx.pushUndoSnapshot(snapshot);
 
-    applyTrackSwapForward(videoFrames, oldTrack, newTrack);
+    const last = applyTrackSwapForward(videoFrames, oldTrack, newTrack);
+    swapBoutsWithTracks(ctx, oldTrack, newTrack, frameIdx + 1, last);
 
     ctx.state.markChanged();
   },

@@ -46,6 +46,8 @@ import {
   DeleteInstanceAndTrack,
 } from "../commands";
 import { requestToggleNegativeFrame } from "@/lib/negativeFrame";
+import { setBehaviorMode } from "@/lib/behaviorCoding";
+import { useBehaviorStore } from "@/stores/behaviorStore";
 
 function isTextInput(e: KeyboardEvent): boolean {
   const tag = (e.target as HTMLElement)?.tagName;
@@ -57,6 +59,13 @@ export function useKeyboardShortcuts() {
     const store = useAppStore.getState;
 
     const unsubscribe = tinykeys(window, {
+      // Label Behaviors mode (its own keys: useBehaviorKeys)
+      [DEFAULT_SHORTCUTS["label behaviors"]]: (e) => {
+        if (isTextInput(e)) return;
+        e.preventDefault();
+        setBehaviorMode(!useBehaviorStore.getState().mode);
+      },
+
       // Frame navigation (direct store for responsiveness)
       [DEFAULT_SHORTCUTS["frame next"]]: (e) => {
         e.preventDefault();

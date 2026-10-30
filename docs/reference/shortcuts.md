@@ -72,6 +72,14 @@ this page is the full list.
 | Undo | ++cmd+z++ |
 | Redo | ++cmd+shift+z++ |
 
+## Behavior labeling
+
+| Action | Shortcut |
+|---|---|
+| Label Behaviors mode on or off | ++cmd+shift+l++ / ++ctrl+shift+l++ |
+
+While the mode is on, a behavior's letter codes it and ++1++ … ++9++ pick the animal — [guide](../guides/behavior.md).
+
 ## Tracks
 
 | Action | Shortcut |

@@ -14,6 +14,14 @@ This app makes extensive use of `sleap-io.js` for I/O, data model, SLP file hand
 - Docs: https://iojs.sleap.ai/usage.md, https://iojs.sleap.ai/api.md
 - Can use a local sibling checkout at `../sleap-io.js` (Vite auto-detects). CI uses the published package, not a sibling checkout.
 
+## Behavior labels
+Behavior labels are sleap-io events (`labels.events`, `labels.eventTypes`, SLP format 2.6). `src/lib/behaviorEvents.ts` holds the rules and lists the vocabulary (metadata keys, "not" types, sources), which LUC3D (`import-export/behavior-events.js`) and Python sleap-io share: change them together. The `.slp` is the only link between the apps.
+- Events and types are immutable: edits build new objects and arrays, so an undo snapshot is the old references. Edit only through `src/commands/behaviorCommands.ts`, which makes one undo step per edit.
+- A bout is stored on the session's first camera and shows on every camera of the session.
+- Don't drop what you don't understand: other tools' metadata keys stay on a type (LUC3D's `lucid_id`), and `session.metadata.lucid` is LUC3D's.
+- Anything that builds a new `Labels` from another must carry `eventTypes` and `events` (see `extractClipCommands.ts`). Anything that swaps two tracks over a range calls `swapAnimalsInRange`.
+- Tests: `tests/unit/behaviorEvents.test.ts`, `behaviorCoding.test.ts`, `behaviorInterop.test.ts` (a file LUC3D wrote, `tests/fixtures/luc3d_behavior.slp`), `tests/e2e/behaviorLabeling.spec.ts`. The live two-way test is LUC3D's `tests/e2e/behavior-cross-app.mjs`.
+
 ## Commands
 ```
 bun run dev          # Browser dev server (port 5173)
