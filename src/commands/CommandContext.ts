@@ -7,6 +7,7 @@
  */
 
 import { Instance, LabeledFrame, PredictedInstance } from "@talmolab/sleap-io.js";
+import type { Event, EventType } from "@talmolab/sleap-io.js";
 import { useAppStore, type AppState } from "../stores/appStore";
 import { UpdateTopic } from "../types";
 import type { Skeleton, SuggestionFrame, Track, Video } from "../types";
@@ -60,6 +61,14 @@ interface UndoSnapshot {
   videos: Video[];
   skeletons: Skeleton[];
   suggestions: SuggestionFrame[];
+  /**
+   * Behavior labels: immutable objects, every edit builds new arrays
+   * (`lib/behaviorEvents.ts`), so references are a full snapshot.
+   */
+  eventTypes: EventType[];
+  events: Event[];
+  /** An edit of events alone: restoring it touches no frame and moves no view. */
+  eventsOnly?: boolean;
   /** Index of selected instance in the current frame's instances array. */
   selectedIdx: number;
   /** The video that was active when the snapshot was taken. */
@@ -158,6 +167,8 @@ export class CommandContext {
       videos: labels ? [...labels.videos] : [],
       skeletons: labels ? [...labels.skeletons] : [],
       suggestions: labels ? [...labels.suggestions] : [],
+      eventTypes: labels ? [...labels.eventTypes] : [],
+      events: labels ? [...labels.events] : [],
       selectedIdx,
       activeVideo: video,
       activeFrameIdx: frameIdx,
@@ -197,6 +208,8 @@ export class CommandContext {
       videos: labels ? [...labels.videos] : [],
       skeletons: labels ? [...labels.skeletons] : [],
       suggestions: labels ? [...labels.suggestions] : [],
+      eventTypes: labels ? [...labels.eventTypes] : [],
+      events: labels ? [...labels.events] : [],
       selectedIdx,
       activeVideo: video,
       activeFrameIdx: frameIdx,
@@ -261,12 +274,23 @@ export class CommandContext {
       videos: labels ? [...labels.videos] : [],
       skeletons: labels ? [...labels.skeletons] : [],
       suggestions: labels ? [...labels.suggestions] : [],
+      eventTypes: labels ? [...labels.eventTypes] : [],
+      events: labels ? [...labels.events] : [],
       selectedIdx,
       activeVideo,
       activeFrameIdx,
     };
 
     return { snapshot, frames };
+  }
+
+  /**
+   * A snapshot of the behavior labels alone, for a command that edits nothing else
+   * (see `behaviorCommands.ts`). Restoring it leaves frames and the view as they are.
+   */
+  takeEventsSnapshot(commandName: string): UndoSnapshot {
+    const snapshot = this.takeSnapshot(commandName);
+    return { ...snapshot, frame: null, eventsOnly: true };
   }
 
   /** Push a custom snapshot onto the undo stack. */
@@ -285,6 +309,15 @@ export class CommandContext {
   private restoreSnapshot(snapshot: UndoSnapshot): UndoSnapshot {
     const { labels } = this.state;
     if (!labels) return this.takeSnapshot(snapshot.commandName);
+
+    if (snapshot.eventsOnly) {
+      const replaced = this.takeEventsSnapshot(snapshot.commandName);
+      labels.eventTypes = [...snapshot.eventTypes];
+      labels.events = [...snapshot.events];
+      this.state.markChanged();
+      dirtyFrameTracker.markFromSnapshot(snapshot);
+      return replaced;
+    }
 
     // If this is a multi-frame snapshot, take a matching before-snapshot —
     // scoped to the same (video, frame-range) the original snapshot covered
@@ -317,6 +350,8 @@ export class CommandContext {
     labels.videos = [...snapshot.videos];
     labels.skeletons = [...snapshot.skeletons];
     labels.suggestions = [...snapshot.suggestions];
+    labels.eventTypes = [...snapshot.eventTypes];
+    labels.events = [...snapshot.events];
 
     if (snapshot.allFrames) {
       // Multi-frame restore: rebuild all labeled frames

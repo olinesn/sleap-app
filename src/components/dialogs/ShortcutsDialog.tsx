@@ -42,6 +42,7 @@ const CATEGORIES: Record<string, string[]> = {
     "clear selection",
   ],
   Editing: [
+    "label behaviors",
     "add instance",
     "delete instance",
     "accept all predictions",

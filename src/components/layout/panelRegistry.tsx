@@ -21,12 +21,14 @@ import {
   Globe,
   GraduationCap,
   TableProperties,
+  Tags,
 } from "lucide-react";
 
 import { VideosPanel } from "../panels/VideosPanel";
 import { SkeletonPanel } from "../panels/SkeletonPanel";
 import { InstancesPanel } from "../panels/InstancesPanel";
 import { SuggestionsPanel } from "../panels/SuggestionsPanel";
+import { BehaviorPanel } from "../panels/BehaviorPanel";
 import { ViewPanel } from "../panels/ViewPanel";
 import { DebugPanel } from "../panels/DebugPanel";
 import { NotificationsPanel } from "../panels/NotificationsPanel";
@@ -43,6 +45,7 @@ export const PANELS = [
   { id: "instances", label: "Instances", icon: Users, component: InstancesPanel },
   { id: "view", label: "View", icon: Eye, component: ViewPanel },
   { id: "suggestions", label: "Suggestions", icon: Lightbulb, component: SuggestionsPanel },
+  { id: "behavior", label: "Behavior", icon: Tags, component: BehaviorPanel },
   { id: "frames", label: "Frames", icon: TableProperties, component: FramesPanel },
   { id: "inference", label: "Inference", icon: Zap, component: InferencePanel },
   { id: "training", label: "Training", icon: GraduationCap, component: TrainingPanel },

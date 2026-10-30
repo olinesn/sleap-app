@@ -18,6 +18,7 @@ import { ContextMenu } from "./ContextMenu";
 import { SkeletonBuildBar } from "./SkeletonBuildBar";
 import { AnchorPickBar } from "./AnchorPickBar";
 import { TransposePickBar } from "./TransposePickBar";
+import { BehaviorReadout } from "./BehaviorReadout";
 import {
   renderInstances,
   hitTestNode,
@@ -3437,6 +3438,8 @@ export function VideoPlayer() {
         <AnchorPickBar />
         {/* Multi-instance transpose picker prompt (self-guards to pick mode). */}
         <TransposePickBar />
+        {/* Behaviors at this frame, and Label Behaviors mode's state. */}
+        <BehaviorReadout />
       </div>
 
       {/* Seekbar */}
