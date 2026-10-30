@@ -24,6 +24,7 @@ import {
   type ResolvedConflict,
 } from "../../lib/mergeConflicts";
 import { loadLabelsFromSlpFile, loadLabelsFromSlpPath } from "../../lib/loadProject";
+import { tooNewFileMessage } from "../../lib/tooNewFile";
 import { summarizeMatch, type MatchPreview } from "../../lib/mergeProject";
 import { getPlatform } from "../../platform/index";
 import { ConflictReview } from "./ConflictReview";
@@ -90,14 +91,14 @@ export function MergeProjectDialog() {
       setPreview(null);
       setConflicts([]);
       setChoices({});
+      const name =
+        typeof source === "string" ? source.split(/[\\/]/).pop() ?? source : source.name;
       try {
         const platform = await getPlatform();
         const donorLabels =
           typeof source === "string"
             ? await loadLabelsFromSlpPath(source, platform.readFile)
             : await loadLabelsFromSlpFile(source);
-        const name =
-          typeof source === "string" ? source.split(/[\\/]/).pop() ?? source : source.name;
         // Same matchers as the merge, so the preview reflects what will happen.
         const match = await labels.match(donorLabels, MERGE_INTO_PROJECT_MATCHERS);
         const previewSummary = summarizeMatch(match);
@@ -109,7 +110,7 @@ export function MergeProjectDialog() {
           setConflicts(await enumerateConflicts(labels, donorLabels));
         }
       } catch (e) {
-        setError(errMsg(e));
+        setError(tooNewFileMessage(e, name) ?? errMsg(e));
       } finally {
         setBusy(null);
       }

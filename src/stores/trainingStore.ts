@@ -5,6 +5,7 @@ import { ZMQ_CONTROLLER_PORT, ZMQ_PUBLISH_PORT } from "@/platform/trainingArgs";
 import { isTauri } from "@/platform";
 import { computeRuntimeMetrics } from "@/lib/trainingMetrics";
 import { lastErrorLine } from "@/lib/processLog";
+import { loadErrorText } from "@/lib/tooNewFile";
 import { formatRunTimestamp } from "@/lib/timestamp";
 import { computeInstanceSizeStats, recommendMaxStride, detectVideoChannels, resolveInputChannels, formatBytes } from "@/lib/modelStats";
 import { confirmDialog } from "@/stores/confirmStore";
@@ -2495,7 +2496,7 @@ export const useTrainingStore = create<TrainingState>()((set, get) => ({
           } catch (e) {
             console.error("[training] Post-training inference failed:", e);
             set((s) => ({
-              log: appendLog(s.log, `— Post-training inference failed: ${e instanceof Error ? e.message : String(e)}`),
+              log: appendLog(s.log, `— Post-training inference failed: ${loadErrorText(e)}`),
             }));
           }
         }
