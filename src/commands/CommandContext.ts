@@ -314,7 +314,7 @@ export class CommandContext {
       const replaced = this.takeEventsSnapshot(snapshot.commandName);
       labels.eventTypes = [...snapshot.eventTypes];
       labels.events = [...snapshot.events];
-      this.state.markChanged();
+      this.state.markEventsChanged();
       dirtyFrameTracker.markFromSnapshot(snapshot);
       return replaced;
     }

@@ -34,7 +34,8 @@ Click **Label behaviors** (++cmd+shift+l++ / ++ctrl+shift+l++). While it is on:
 | ++esc++ | Cancels a waiting target, or leaves the mode. |
 
 Everything else works as usual: arrow keys step through frames, and ++cmd+z++ / ++ctrl+z++
-undoes a label. The top left of the video shows who you are labelling and what is running.
+undoes a label. The top left of the video shows who you are labelling and what is running, and
+each animal's skeleton takes its own color, with its name and the number that picks it.
 A behavior still running when you save is written up to the current frame, and keeps running.
 
 The animals are the project's **identities** if it has any, otherwise its **tracks**.
@@ -61,6 +62,13 @@ The prediction stays in the file, so its review shows as Accepted or Rejected.
 
 In a multi-camera project a bout belongs to the whole recording session: it shows on every
 camera, whichever one you labelled it on. A clip you extract takes the bouts over its frames.
+
+## On very large projects
+
+A project of a million detections or more, such as a long recording on many cameras, opens and
+labels the same way, but its automatic crash-recovery copy holds only the behavior labels: if
+the app closes before you save, opening the same file again offers them back. Saving such a
+project can take a minute or so.
 
 ## In the file
 

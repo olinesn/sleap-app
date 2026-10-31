@@ -45,11 +45,14 @@ export interface DirtySnapshotView {
   /** The active (video, frameIdx) — used when `frame` is null (frame creation). */
   activeVideo: Video | null;
   activeFrameIdx: number;
+  /** A behavior label edit: it changed `labels.events` and no frame. */
+  eventsOnly?: boolean;
 }
 
 /** What an edit did, for autosave purposes. */
 export type DirtyClassification =
   | { kind: "frames"; frames: FrameKey[] }
+  | { kind: "events" }
   | { kind: "structural" };
 
 /**
@@ -87,6 +90,7 @@ const FRAME_LEVEL_COMMANDS: ReadonlySet<string> = new Set([
  * anything ambiguous resolves to `structural`.
  */
 export function classifyDirty(snapshot: DirtySnapshotView): DirtyClassification {
+  if (snapshot?.eventsOnly) return { kind: "events" };
   const name = snapshot?.commandName;
   // Unknown / non-frame-level command → full snapshot (safe default).
   if (!name || !FRAME_LEVEL_COMMANDS.has(name)) return { kind: "structural" };
@@ -139,15 +143,27 @@ export function classifyDirty(snapshot: DirtySnapshotView): DirtyClassification 
 export class DirtyFrameTracker {
   private dirty = new Map<Video, Set<number>>();
   private needsFull = false;
+  private eventsDirty = false;
 
-  /** Whether the next autosave must rewrite the whole base snapshot. */
+  /**
+   * Whether the next autosave must rewrite the whole base snapshot. A frame delta cannot
+   * express behavior labels, so an edit of them counts, unless the tick saves them on
+   * their own first ({@link onlyEventsPending}, {@link takeEvents}).
+   */
   get needsFullSnapshot(): boolean {
-    return this.needsFull;
+    return this.needsFull || this.eventsDirty;
+  }
+
+  /** Whether all that changed since the last write is behavior labels. */
+  get onlyEventsPending(): boolean {
+    if (!this.eventsDirty || this.needsFull) return false;
+    for (const set of this.dirty.values()) if (set.size > 0) return false;
+    return true;
   }
 
   /** Whether there is anything to persist (dirty frames or a structural change). */
   hasPending(): boolean {
-    if (this.needsFull) return true;
+    if (this.needsFull || this.eventsDirty) return true;
     for (const set of this.dirty.values()) if (set.size > 0) return true;
     return false;
   }
@@ -178,6 +194,10 @@ export class DirtyFrameTracker {
         this.needsFull = true;
         return;
       }
+      if (result.kind === "events") {
+        this.eventsDirty = true;
+        return;
+      }
       for (const f of result.frames) this.markFrame(f.video, f.frameIdx);
     } catch {
       // A hook that runs inside every command must never throw; on any
@@ -197,15 +217,21 @@ export class DirtyFrameTracker {
 
   /** Return the pending state AND reset — the autosave tick's read. */
   drain(): { needsFullSnapshot: boolean; frames: FrameKey[] } {
-    const result = { needsFullSnapshot: this.needsFull, frames: this.peekFrames() };
+    const result = { needsFullSnapshot: this.needsFullSnapshot, frames: this.peekFrames() };
     this.clear();
     return result;
+  }
+
+  /** The behavior labels were saved on their own: nothing of theirs is pending. */
+  takeEvents(): void {
+    this.eventsDirty = false;
   }
 
   /** Reset all pending state (e.g. on project load or a full save). */
   clear(): void {
     this.dirty.clear();
     this.needsFull = false;
+    this.eventsDirty = false;
   }
 }
 

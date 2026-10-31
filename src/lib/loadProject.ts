@@ -37,6 +37,7 @@ import {
 import { consumeLastBrowserFileHandle } from "../platform/index";
 import { toast } from "@/lib/notify";
 import { confirmDiscardUnsavedWork } from "./unsavedGuard";
+import { behaviorDraftKey, offerBehaviorDraft } from "./behaviorDraft";
 import { resolveExternalVideos } from "./resolveVideos";
 import { installTauriFsResolver } from "./fsResolver";
 import { fileSize, readRange } from "./nativeRange";
@@ -190,6 +191,7 @@ export async function loadProjectFromFile(file: File): Promise<boolean> {
     toast.success(`Loaded ${file.name}`, {
       description: `${labels.videos.length} video(s), ${labels.labeledFrames.length} labeled frames`,
     });
+    await offerBehaviorDraft(behaviorDraftKey(useAppStore.getState()), labels);
     // Fire-and-forget: best-effort, no-ops on browser, must not add latency.
     // (sleap-app's own update is surfaced via the Environment badge instead
     // of a toast now — see App.tsx's stable-channel check.)
@@ -353,6 +355,7 @@ export async function loadProjectFromPath(
     toast.success(`Loaded ${filename}`, {
       description: `${labels.videos.length} video(s), ${labels.labeledFrames.length} labeled frames`,
     });
+    await offerBehaviorDraft(behaviorDraftKey(useAppStore.getState()), labels);
     // Fire-and-forget: best-effort, no-ops on browser, must not add latency.
     // (sleap-app's own update is surfaced via the Environment badge instead
     // of a toast now — see App.tsx's stable-channel check.)

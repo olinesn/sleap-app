@@ -582,6 +582,8 @@ export interface AppState {
   setMarkedFrame: (marked: { video: Video; frameIdx: number } | null) => void;
   resetView: () => void;
   markChanged: () => void;
+  /** {@link markChanged} for an edit of behavior labels alone: no frame is dirty. */
+  markEventsChanged: () => void;
   touchFrame: () => void;
   clearChanges: () => void;
   /** Set a per-track color override (hex) for the active project. Local viewing
@@ -1241,6 +1243,12 @@ export const useAppStore = create<AppState>()(
           state.lastInteractedFrame = state.frameIdx;
         });
       },
+
+      markEventsChanged: () =>
+        set((state) => {
+          state.hasChanges = true;
+          state.editSeq += 1;
+        }),
 
       touchFrame: () =>
         set((state) => {

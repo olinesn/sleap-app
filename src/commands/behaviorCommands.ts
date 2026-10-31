@@ -2,8 +2,8 @@
  * Behavior label commands: every edit of `labels.events` / `labels.eventTypes` goes
  * through here, so each is one undo step and marks the project changed. They edit no
  * frame, so the undo snapshot is the events alone (`takeEventsSnapshot`), and an edit
- * forces a full autosave base (a frame delta cannot express events; this is the default
- * for any command `autosaveDirty.ts` does not list as frame-level).
+ * forces a full autosave base (a frame delta cannot express events), except on a project
+ * too big for that, whose labels are saved on their own (`lib/behaviorDraft.ts`).
  */
 import type { Event, EventType, Video } from "@talmolab/sleap-io.js";
 import { UpdateTopic } from "../types";
@@ -41,7 +41,7 @@ function behaviorCommand(
       if (!labels) return;
       ctx.pushUndoSnapshot(ctx.takeEventsSnapshot(name));
       edit(ctx, labels, params ?? {});
-      ctx.state.markChanged();
+      ctx.state.markEventsChanged();
     },
   };
 }
