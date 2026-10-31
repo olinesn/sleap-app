@@ -20,6 +20,8 @@ import {
 import { confirmDialog } from "@/stores/confirmStore";
 import { useAppStore } from "@/stores/appStore";
 import { toast } from "@/lib/notify";
+import { isTauri } from "@/lib/platform";
+import { isSourceChanged, type SourceSnapshot } from "@/lib/draftStaleness";
 
 /** localStorage override of {@link DEFAULT_BIG_PROJECT_INSTANCES} (for tests). */
 export const BIG_PROJECT_FLAG_KEY = "sleap.bigProjectInstances";
@@ -65,6 +67,8 @@ type ParticipantRow = [kind: "track" | "identity", index: number] | null;
 export interface BehaviorDraft {
   savedAt: number;
   videoCount: number;
+  /** The file these labels were edited on, on desktop, where the key is only its path. */
+  source?: SourceSnapshot;
   eventTypes: Array<{
     name: string;
     description: string;
@@ -195,8 +199,26 @@ async function withStore<T>(
   }
 }
 
+/** A desktop project file's size and time now. Undefined in a browser (its key holds them). */
+async function projectFileSnapshot(): Promise<SourceSnapshot | undefined> {
+  const path = useAppStore.getState().projectPath;
+  if (!isTauri || !path) return undefined;
+  try {
+    const { stat } = await import("@tauri-apps/plugin-fs");
+    const info = await stat(path);
+    return { size: info.size, lastModified: info.mtime ? new Date(info.mtime).getTime() : undefined };
+  } catch {
+    return undefined;
+  }
+}
+
+/** The project file as it was when opened or last saved: what a draft's labels were edited on. */
+let openedFile: { key: string; snapshot: SourceSnapshot | undefined } | null = null;
+
 export async function saveBehaviorDraft(key: string, labels: Labels): Promise<void> {
+  if (openedFile?.key !== key) openedFile = { key, snapshot: await projectFileSnapshot() };
   const draft = snapshotBehavior(labels);
+  draft.source = openedFile.snapshot;
   await withStore("readwrite", (store) => {
     store.put(draft, key);
     const cursor = store.openCursor();
@@ -210,6 +232,8 @@ export async function saveBehaviorDraft(key: string, labels: Labels): Promise<vo
 }
 
 export async function deleteBehaviorDraft(key: string): Promise<void> {
+  // A real save changes the file: the next draft goes by the file as saved.
+  openedFile = null;
   try {
     await withStore("readwrite", (store) => {
       store.delete(key);
@@ -219,8 +243,36 @@ export async function deleteBehaviorDraft(key: string): Promise<void> {
   }
 }
 
+/** What to ask before putting a draft back. A file changed since may hold labels the draft lacks. */
+export function behaviorDraftPrompt(
+  draft: Pick<BehaviorDraft, "savedAt" | "events" | "source">,
+  file: SourceSnapshot | undefined,
+): { title: string; message: string; confirmLabel: string; cancelLabel: string; destructive: boolean } {
+  const n = draft.events.filter((e) => !e.predicted).length;
+  const count = `${n.toLocaleString("en-US")} behavior label${n === 1 ? "" : "s"}`;
+  const changed =
+    !!draft.source &&
+    file?.size != null &&
+    file.lastModified != null &&
+    isSourceChanged(draft.source, { size: file.size, lastModified: file.lastModified });
+  return {
+    title: "Restore unsaved behavior labels?",
+    message: changed
+      ? `These ${count} were edited ${new Date(draft.savedAt).toLocaleString()} and not saved, and ` +
+        `this file has changed on disk since, perhaps saved by another app. ` +
+        `Restoring replaces the labels the file holds now with these.`
+      : `This file was last edited ${new Date(draft.savedAt).toLocaleString()} and not saved. ` +
+        `Restore its ${count}?`,
+    confirmLabel: "Restore",
+    cancelLabel: "Discard",
+    destructive: changed,
+  };
+}
+
 /** If labels were left unsaved on this file, offer them back. Never blocks an open on an error. */
 export async function offerBehaviorDraft(key: string, labels: Labels): Promise<void> {
+  const file = await projectFileSnapshot();
+  openedFile = { key, snapshot: file };
   let draft: BehaviorDraft | undefined;
   try {
     draft = await withStore<BehaviorDraft>("readonly", (store) => store.get(key));
@@ -228,15 +280,7 @@ export async function offerBehaviorDraft(key: string, labels: Labels): Promise<v
     return;
   }
   if (!draft) return;
-  const n = draft.events.filter((e) => !e.predicted).length;
-  const restore = await confirmDialog({
-    title: "Restore unsaved behavior labels?",
-    message:
-      `This file was last edited ${new Date(draft.savedAt).toLocaleString()} and not saved. ` +
-      `Restore its ${n.toLocaleString("en-US")} behavior label${n === 1 ? "" : "s"}?`,
-    confirmLabel: "Restore",
-    cancelLabel: "Discard",
-  });
+  const restore = await confirmDialog(behaviorDraftPrompt(draft, file));
   if (!restore) {
     await deleteBehaviorDraft(key);
     return;
