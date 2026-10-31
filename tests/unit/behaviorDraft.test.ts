@@ -22,6 +22,7 @@ import {
 import {
   applyBehaviorDraft,
   behaviorDraftKey,
+  behaviorDraftPrompt,
   isBigProject,
   snapshotBehavior,
   BIG_PROJECT_FLAG_KEY,
@@ -106,6 +107,32 @@ describe("a behavior draft", () => {
     const file = new File(["abc"], "x.slp", { lastModified: 5 });
     expect(behaviorDraftKey({ projectFile: file })).toBe("x.slp|3|5");
     expect(behaviorDraftKey({ projectFile: null, projectPath: "/d/x.slp" })).toBe("/d/x.slp|");
+  });
+});
+
+describe("offering a draft back", () => {
+  const events = [{ predicted: false }, { predicted: false }, { predicted: true }] as never;
+  const source = { size: 100, lastModified: 5000 };
+
+  it("counts only the hand labels and asks plainly when the file is as it was", () => {
+    const p = behaviorDraftPrompt({ savedAt: 1, events, source }, { size: 100, lastModified: 5000 });
+    expect(p.message).toContain("Restore its 2 behavior labels?");
+    expect(p.message).not.toContain("changed on disk");
+    expect(p.destructive).toBe(false);
+  });
+
+  it("warns when the file changed on disk since, by size or by time", () => {
+    for (const file of [{ size: 200, lastModified: 5000 }, { size: 100, lastModified: 6000 }]) {
+      const p = behaviorDraftPrompt({ savedAt: 1, events, source }, file);
+      expect(p.message).toContain("changed on disk");
+      expect(p.message).toContain("replaces the labels the file holds now");
+      expect(p.destructive).toBe(true);
+    }
+  });
+
+  it("does not warn with nothing to compare: a browser draft, or a file it cannot read", () => {
+    expect(behaviorDraftPrompt({ savedAt: 1, events }, { size: 200, lastModified: 6000 }).destructive).toBe(false);
+    expect(behaviorDraftPrompt({ savedAt: 1, events, source }, undefined).destructive).toBe(false);
   });
 });
 

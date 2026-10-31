@@ -21,7 +21,7 @@ Behavior labels are sleap-io events (`labels.events`, `labels.eventTypes`, SLP f
 - Don't drop what you don't understand: other tools' metadata keys stay on a type (LUC3D's `lucid_id`), and `session.metadata.lucid` is LUC3D's.
 - Anything that builds a new `Labels` from another must carry `eventTypes` and `events` (see `extractClipCommands.ts`). Anything that swaps two tracks over a range calls `swapAnimalsInRange`.
 - While the mode is on, a skeleton wears its animal's color and name (`frameAnimals`: the identity through the session's groups, else the track), so animals can be told apart on a multi-camera project, whose tracks are per camera.
-- **Big projects** (`isBigProject`, a million instances: a real 8-camera project has 4 million and 63 million points): a behavior edit marks only the events changed (`markEventsChanged`, `DirtyFrameTracker.onlyEventsPending`) and autosave saves the labels alone in IndexedDB (`src/lib/behaviorDraft.ts`), keyed by the opened file, offered back when that file is opened again and dropped by a real save. A full draft there holds the app for a minute or more. The panel's rows are memoized and keyed by event (`BoutRow`, `PredictionRow`), and review status comes from one index (`predictionStatuses`): an edit must not re-render or rescan thousands of rows.
+- **Big projects** (`isBigProject`, a million instances: a real 8-camera project has 4 million and 63 million points): a behavior edit marks only the events changed (`markEventsChanged`, `DirtyFrameTracker.onlyEventsPending`) and autosave saves the labels alone in IndexedDB (`src/lib/behaviorDraft.ts`), keyed by the opened file, offered back when that file is opened again and dropped by a real save. On desktop the key is only the path, so a draft records the file's size and time and warns if the file changed since (another app saved it). A full draft there holds the app for a minute or more. The panel's rows are memoized and keyed by event (`BoutRow`, `PredictionRow`), and review status comes from one index (`predictionStatuses`): an edit must not re-render or rescan thousands of rows.
 - Tests: `tests/unit/behaviorDraft.test.ts`, `tests/unit/behaviorEvents.test.ts`, `behaviorCoding.test.ts`, `behaviorInterop.test.ts` (a file LUC3D wrote, `tests/fixtures/luc3d_behavior.slp`), `tests/e2e/behaviorLabeling.spec.ts`. The live two-way test is LUC3D's `tests/e2e/behavior-cross-app.mjs`.
 
 ## Commands
@@ -44,6 +44,10 @@ which runs the package.json script with the required `--isolate` flag.
 - Unit tests: `tests/unit/`
 - E2E tests: `tests/e2e/`
 - Fixtures: `tests/fixtures/` (SLP files)
+
+## Big projects on the desktop build
+- On macOS, `lib.rs` turns on WebKit's `WebKitSuppressMemoryPressureHandler` default before any window opens. Without it, WebKit ends a page holding about 8 GB once it has been out of sight for about 8 minutes (`reason=ExceededMemoryLimit` in the system log) and reloads it blank, closing the project without a word.
+- A desktop save never writes straight over a project: a temp file beside it, then a rename (`writeSlpBytesAtomic`, `saveProject.ts`).
 
 ## Driving the desktop GUI (tauri-pilot)
 [`tauri-pilot`](https://github.com/mpiton/tauri-pilot) lets you (and AI agents)

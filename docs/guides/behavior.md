@@ -67,8 +67,8 @@ camera, whichever one you labelled it on. A clip you extract takes the bouts ove
 
 A project of a million detections or more, such as a long recording on many cameras, opens and
 labels the same way, but its automatic crash-recovery copy holds only the behavior labels: if
-the app closes before you save, opening the same file again offers them back. Saving such a
-project can take a minute or so.
+the app closes before you save, opening the same file again offers them back, and warns you
+if the file has changed since. Saving such a project can take a minute or so.
 
 ## In the file
 
