@@ -13,6 +13,7 @@ import type { Command } from "./types";
 import type { CommandContext } from "./CommandContext";
 import { useAppStore } from "../stores/appStore";
 import { toast } from "@/lib/notify";
+import { copyDetectionLabels } from "@/lib/detectionLabels";
 import {
   showLabelingHint,
   hintIfFirstInstance,
@@ -423,6 +424,7 @@ export const ConvertPredictionToInstance: Command = {
       track: predicted.track,
       fromPredicted: predicted,
     });
+    copyDetectionLabels(predicted, userInstance);
     const hadMissingNodes = userInstance.points.some(
       (p) => isNaN(p.xy[0]) || isNaN(p.xy[1])
     );
@@ -494,6 +496,7 @@ export const AddInstancesFromAllPredictions: Command = {
         track: inst.track,
         fromPredicted: inst,
       });
+      copyDetectionLabels(inst, userInstance);
       fillMissingPredictedNodes(userInstance);
       if (!firstConverted) firstConverted = userInstance;
       return userInstance;
@@ -552,6 +555,7 @@ export const AddInstancesFromAllPredictionsInProject: Command = {
           track: inst.track,
           fromPredicted: inst,
         });
+        copyDetectionLabels(inst, userInstance);
         fillMissingPredictedNodes(userInstance);
         totalAccepted++;
         return userInstance;
