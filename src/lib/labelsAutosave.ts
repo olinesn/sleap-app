@@ -36,6 +36,7 @@ import {
 import { computeAutosaveDebounceMs } from "@/lib/autosaveDebounce";
 import { isIncrementalAutosaveEnabled } from "@/lib/autosaveFlags";
 import { dirtyFrameTracker } from "@/lib/autosaveDirty";
+import { isBigProject, saveBehaviorDraft, behaviorDraftKey } from "@/lib/behaviorDraft";
 import {
   runIncrementalAutosave,
   structuralSignature,
@@ -115,6 +116,41 @@ function warnDraftUnsupportedOnce(): void {
   );
 }
 
+/** Whether the next tick saves behavior labels alone, so it can come soon. */
+function nextTickIsBehaviorLabelsAlone(): boolean {
+  const { labels } = useAppStore.getState();
+  return !!labels && dirtyFrameTracker.onlyEventsPending && isBigProject(labels);
+}
+
+/**
+ * On a project too big to rewrite after every pause in labelling, save behavior labels
+ * on their own. A full draft of 60 million points holds the app for a minute or more.
+ * True when it dealt with this tick. Never marks the project clean: the file on disk
+ * does not have these labels until a real save.
+ */
+async function autosaveBehaviorLabelsAlone(reArm?: () => void): Promise<boolean> {
+  if (!nextTickIsBehaviorLabelsAlone()) return false;
+  const store = useAppStore.getState();
+  if (!store.hasChanges || store.isLoading) {
+    if (store.hasChanges && reArm) reArm();
+    return true;
+  }
+  inFlight = true;
+  try {
+    dirtyFrameTracker.takeEvents();
+    await saveBehaviorDraft(
+      behaviorDraftKey(store),
+      store.labels as Labels,
+    );
+  } catch (err) {
+    // A later edit tries again; an edit since this one is marked and re-armed already.
+    console.warn("[autosave] behavior labels draft failed:", err);
+  } finally {
+    inFlight = false;
+  }
+  return true;
+}
+
 /**
  * Auto-save the current labels to the OPFS draft IF the project is a browser
  * large-embedded-pkg with unsaved edits and no save/compile already running.
@@ -127,6 +163,7 @@ export async function maybeAutosaveLabelsDraft(
   reArm?: () => void,
 ): Promise<void> {
   if (inFlight) return;
+  if (await autosaveBehaviorLabelsAlone(reArm)) return;
   // Desktop: a disk-backed crash-recovery net (never marks the project clean).
   if (isTauri) {
     await maybeAutosaveTauriDraft(reArm);
@@ -333,7 +370,8 @@ export function setupLabelsAutosave(): () => void {
     // full snapshot (flag off, or a pending structural change) keeps the adaptive
     // backoff so a large re-serialize doesn't fire right after an edit-pause.
     const willAppend =
-      isIncrementalAutosaveEnabled() && !dirtyFrameTracker.needsFullSnapshot;
+      (isIncrementalAutosaveEnabled() && !dirtyFrameTracker.needsFullSnapshot) ||
+      nextTickIsBehaviorLabelsAlone();
     const delay = willAppend
       ? INCREMENTAL_APPEND_DEBOUNCE_MS
       : computeAutosaveDebounceMs(frameCount, lastAutosaveWriteMs);

@@ -54,6 +54,8 @@ export interface RenderedInstance {
   isPredicted: boolean;
   isSelected: boolean;
   trackName: string | null;
+  /** Which animal this is, while labelling behaviors. */
+  animalTag?: { text: string; color: RGB; focal: boolean };
   score?: number;
   /** Per-instance canvas visibility (#2755). Instance is skipped when false. */
   visible: boolean;
@@ -121,7 +123,7 @@ export function renderInstances(
   // collects scene-space label boxes so overlapping labels get nudged upward.
   const placed: Array<[number, number, number, number]> = [];
   for (const instance of sorted) {
-    if (!instance.visible || !instance.trackName) continue;
+    if (!instance.visible || !instance.trackName || instance.animalTag) continue;
     if (!(instance.isSelected || (instance.isPredicted && opts.colorPredicted))) continue;
     renderTrackLabel(
       ctx,
@@ -132,6 +134,11 @@ export function renderInstances(
       opts,
       placed,
     );
+  }
+  for (const instance of sorted) {
+    if (!instance.visible || !instance.animalTag) continue;
+    const { text, color, focal } = instance.animalTag;
+    renderLabelAboveNodes(ctx, instance.nodes, text, color, opts, placed, focal);
   }
 }
 
@@ -380,6 +387,23 @@ function renderTrackLabel(
   opts: RenderOptions,
   placed: Array<[number, number, number, number]>,
 ): void {
+  let text = `Track: ${trackName}`;
+  if (opts.showTrackScore && score !== undefined) {
+    text += ` (${score.toFixed(2)})`;
+  }
+  renderLabelAboveNodes(ctx, nodes, text, color, opts, placed);
+}
+
+/** One line of text centered above an instance's visible nodes. */
+function renderLabelAboveNodes(
+  ctx: CanvasRenderingContext2D,
+  nodes: RenderedNode[],
+  text: string,
+  color: RGB,
+  opts: RenderOptions,
+  placed: Array<[number, number, number, number]>,
+  bold = false,
+): void {
   const visibleNodes = nodes.filter((n) => n.visible);
   if (visibleNodes.length === 0) return;
 
@@ -388,15 +412,10 @@ function renderTrackLabel(
   const centerX =
     visibleNodes.reduce((s, n) => s + n.x, 0) / visibleNodes.length;
 
-  let text = `Track: ${trackName}`;
-  if (opts.showTrackScore && score !== undefined) {
-    text += ` (${score.toFixed(2)})`;
-  }
-
   // Font follows the node-label size control (so "bigger labels" finally affects
   // these) and stays screen-constant by dividing out zoom.
   const fontSize = opts.nodeLabelSize / zoom;
-  ctx.font = `${fontSize}px sans-serif`;
+  ctx.font = `${bold ? "bold " : ""}${fontSize}px sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "bottom";
 

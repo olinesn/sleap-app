@@ -32,6 +32,7 @@ import { recordDraftSave, deleteDraftEntry } from "@/lib/draftManifest";
 import { removeTauriDraft } from "@/lib/tauriDraft";
 import { isSameSaveTarget } from "@/lib/saveTargetGuard";
 import { shouldOverwriteOpenedFile } from "@/lib/browserSaveTarget";
+import { behaviorDraftKey, deleteBehaviorDraft } from "@/lib/behaviorDraft";
 
 /**
  * Human-readable byte size for the save progress text (e.g. "3.8 GB", "742 MB").
@@ -97,6 +98,8 @@ async function saveBrowserInMemory(
           const writable = await existingHandle.createWritable();
           await writable.write(blob);
           await writable.close();
+          // The old snapshot no longer reads, and a behavior draft goes by this file.
+          store.set("projectFile", await existingHandle.getFile());
           return { name: existingHandle.name, durable: true };
         }
       } catch (err) {
@@ -131,6 +134,7 @@ async function saveBrowserInMemory(
       await writable.write(blob);
       await writable.close();
       store.set("projectFileHandle", handle);
+      store.set("projectFile", await handle.getFile());
       store.set("filename", handle.name);
       return { name: handle.name, durable: true };
     } catch (err: unknown) {
@@ -221,6 +225,8 @@ export async function saveProjectAsSlp(
 ): Promise<void> {
   const store = useAppStore.getState();
   store.setLoading(true, "Saving project...");
+  // A big project's save holds the main thread: show that it started first.
+  await new Promise((resolve) => setTimeout(resolve, 50));
 
   const saveName = filename
     ? filename.replace(/\.slp$/, "") + ".slp"
@@ -230,6 +236,7 @@ export async function saveProjectAsSlp(
 
   try {
     const platform = await getPlatform();
+    const draftKey = behaviorDraftKey(useAppStore.getState());
 
     if (platform.isTauri) {
       const existingPath = !forceDialog ? store.projectPath : null;
@@ -496,6 +503,7 @@ export async function saveProjectAsSlp(
     // window title gate their entire display on it, so they'd stay stuck on
     // "No project loaded" until the file is reopened via loadProject (which
     // does set it) rather than actually reflecting the freshly-saved project.
+    void deleteBehaviorDraft(draftKey);
     store.set("filename", displayName.split(/[\\/]/).pop() ?? displayName);
     store.clearChanges();
     toast.success("Project saved", { description: displayName });

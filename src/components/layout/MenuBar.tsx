@@ -5,6 +5,7 @@
  * All actions are wired to the command system via CommandContext.
  */
 
+import { useMemo } from "react";
 import { useAppStore, type NavigationDomain } from "../../stores/appStore";
 import { useExportStore } from "@/stores/exportStore";
 import { PANELS } from "./panelRegistry";
@@ -1041,9 +1042,14 @@ function LabelsMenu() {
   const skeletonHasNodes = useAppStore((s) => (s.skeleton?.nodes?.length ?? 0) > 0);
   const hasFrameRange = useAppStore((s) => s.frameRange !== null);
   const setExtractClipDialog = useAppStore((s) => s.setExtractClipDialog);
+  const editSeq = useAppStore((s) => s.editSeq);
   const totalLabeled = labels?.labeledFrames.length ?? 0;
-  const totalInstances =
-    labels?.labeledFrames.reduce((sum, lf) => sum + lf.instances.length, 0) ?? 0;
+  // This menu re-renders on every frame change: count only when an edit could change it.
+  const totalInstances = useMemo(
+    () => labels?.labeledFrames.reduce((sum, lf) => sum + lf.instances.length, 0) ?? 0,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- editSeq re-reads the frames after an edit.
+    [labels, editSeq],
+  );
 
   const exec = (cmd: Parameters<typeof commandContext.execute>[0]) => {
     commandContext.execute(cmd);

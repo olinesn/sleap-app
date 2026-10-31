@@ -3,8 +3,14 @@
  * screen, and the predicted bouts to review. Labels are sleap-io events
  * (`lib/behaviorEvents.ts`), so they open in LUC3D and Python sleap-io as they are.
  */
-import { useMemo, useState } from "react";
-import type { Event, EventParticipant, EventType } from "@talmolab/sleap-io.js";
+import { memo, useCallback, useMemo, useState } from "react";
+import type {
+  Event,
+  EventParticipant,
+  EventType,
+  Labels,
+  PredictedEvent,
+} from "@talmolab/sleap-io.js";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useAppStore } from "@/stores/appStore";
 import { useBehaviorStore } from "@/stores/behaviorStore";
@@ -32,7 +38,7 @@ import {
   eventsForVideo,
   isNotType,
   isPrediction,
-  predictionStatus,
+  predictionStatuses,
   type BehaviorFields,
   type ReviewStatus,
 } from "@/lib/behaviorEvents";
@@ -57,9 +63,11 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
+const FRAME_FORMAT = new Intl.NumberFormat("en-US");
+
 /** A frame as the app shows it (0-based, with separators). */
 function frameText(idx: number): string {
-  return idx.toLocaleString("en-US");
+  return FRAME_FORMAT.format(idx);
 }
 
 function spanText(e: Event): string {
@@ -283,10 +291,140 @@ const STATUS_TEXT: Record<ReviewStatus, string> = {
   mixed: "Partly",
 };
 
+/** A row's React key: the event itself, so an edit re-renders only the rows it changed. */
+const eventKeys = new WeakMap<Event, number>();
+let nextEventKey = 0;
+function eventKey(e: Event): number {
+  let key = eventKeys.get(e);
+  if (key === undefined) {
+    key = nextEventKey++;
+    eventKeys.set(e, key);
+  }
+  return key;
+}
+
+const BoutRow = memo(function BoutRow({
+  bout: e,
+  labels,
+  onEdit,
+}: {
+  bout: Event;
+  labels: Labels;
+  onEdit: (bout: Event) => void;
+}) {
+  return (
+    <li
+      className="group flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 hover:bg-accent/50 [content-visibility:auto] [contain-intrinsic-size:auto_26px]"
+      onClick={() => useAppStore.getState().setFrameIdx(e.startFrame)}
+      title={[e.type.name, boutWho(e), spanText(e), e.metadata.note].filter(Boolean).join(" · ")}
+      data-testid="bout-row"
+    >
+      <span
+        className="inline-block h-2 w-2 shrink-0 rounded-sm"
+        style={{
+          backgroundColor: isNotType(e.type)
+            ? NOT_LABEL_COLOR
+            : behaviorColor(labels, e.type),
+        }}
+      />
+      <span className={cn("min-w-0 flex-1 truncate", isNotType(e.type) && "text-muted-foreground")}>
+        {e.type.name}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-muted-foreground">{boutWho(e)}</span>
+      <span className="shrink-0 tabular-nums">{spanText(e)}</span>
+      <Button
+        size="icon-xs"
+        variant="ghost"
+        className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+        aria-label="Edit bout"
+        onClick={(ev) => {
+          ev.stopPropagation();
+          onEdit(e);
+        }}
+      >
+        <Pencil />
+      </Button>
+      <Button
+        size="icon-xs"
+        variant="ghost"
+        className="shrink-0"
+        aria-label="Delete bout"
+        onClick={(ev) => {
+          ev.stopPropagation();
+          void commandContext.execute(DeleteBout, { bout: e });
+        }}
+      >
+        <Trash2 />
+      </Button>
+    </li>
+  );
+});
+
+const PredictionRow = memo(function PredictionRow({
+  prediction: e,
+  labels,
+  status,
+}: {
+  prediction: PredictedEvent;
+  labels: Labels;
+  status: ReviewStatus;
+}) {
+  return (
+    <li
+      className="cursor-pointer rounded px-1 py-0.5 hover:bg-accent/50 [content-visibility:auto] [contain-intrinsic-size:auto_46px]"
+      onClick={() => useAppStore.getState().setFrameIdx(e.startFrame)}
+      title={e.source ? `From ${e.source}` : undefined}
+      data-testid="prediction-row"
+    >
+      <div className="flex items-center gap-1.5">
+        <span
+          className="inline-block h-2 w-2 shrink-0 rounded-sm opacity-60"
+          style={{ backgroundColor: behaviorColor(labels, e.type) }}
+        />
+        <span className="min-w-0 flex-1 truncate">{e.type.name}</span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground">{boutWho(e)}</span>
+        <span className="shrink-0 tabular-nums">{spanText(e)}</span>
+      </div>
+      <div className="flex items-center justify-end gap-1 pl-3.5">
+        {e.score !== null && (
+          <span className="mr-auto tabular-nums text-muted-foreground">
+            {Math.round(e.score * 100)}%
+          </span>
+        )}
+        {status !== "open" ? (
+          <span className="text-muted-foreground">{STATUS_TEXT[status]}</span>
+        ) : (
+          <>
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={(ev) => {
+                ev.stopPropagation();
+                void commandContext.execute(AcceptPrediction, { prediction: e });
+              }}
+            >
+              Accept
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={(ev) => {
+                ev.stopPropagation();
+                void commandContext.execute(RejectPrediction, { prediction: e });
+              }}
+            >
+              Reject
+            </Button>
+          </>
+        )}
+      </div>
+    </li>
+  );
+});
+
 export function BehaviorPanel() {
   const labels = useAppStore((s) => s.labels);
   const video = useAppStore((s) => s.video);
-  const setFrameIdx = useAppStore((s) => s.setFrameIdx);
   // Re-read labels.events after an edit (edits replace the array in place on `labels`).
   const editSeq = useAppStore((s) => s.editSeq);
   const mode = useBehaviorStore((s) => s.mode);
@@ -299,12 +437,27 @@ export function BehaviorPanel() {
   });
   const [filter, setFilter] = useState("all");
   const [editing, setEditing] = useState<Event | null>(null);
+  const editBout = useCallback((bout: Event) => setEditing(bout), []);
 
-  const events = useMemo(
-    () => (labels && video ? eventsForVideo(labels, video) : []),
+  const { bouts, predictions, statuses, boutCounts } = useMemo(() => {
+    const events = labels && video ? eventsForVideo(labels, video) : [];
+    const byFrame = (a: Event, b: Event) =>
+      a.startFrame - b.startFrame || a.endFrame - b.endFrame;
+    const counts = new Map<EventType, number>();
+    for (const e of events) {
+      if (!e.isPredicted) counts.set(e.type, (counts.get(e.type) ?? 0) + 1);
+    }
+    const shown = (e: Event) =>
+      filter === "all" || (labels && behaviorOfEvent(labels, e)?.name === filter);
+    const predicted = events.filter(isPrediction).filter(shown).sort(byFrame);
+    return {
+      bouts: events.filter((e) => !e.isPredicted).filter(shown).sort(byFrame),
+      predictions: predicted,
+      statuses: labels ? predictionStatuses(labels, predicted) : new Map<Event, ReviewStatus>(),
+      boutCounts: counts,
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- editSeq re-reads labels.events after an edit.
-    [labels, video, editSeq],
-  );
+  }, [labels, video, editSeq, filter]);
 
   if (!labels) {
     return <div className="p-3 text-xs text-muted-foreground">Open a project to label behaviors.</div>;
@@ -313,16 +466,7 @@ export function BehaviorPanel() {
   const types = ethogram(labels);
   const animals = behaviorAnimals(labels) as EventParticipant[];
   const focal = focalAnimal(labels);
-  const boutsOf = (t: EventType) =>
-    events.filter((e) => !e.isPredicted && e.type === t).length;
-
-  const bouts = events
-    .filter((e) => !e.isPredicted)
-    .filter((e) => filter === "all" || behaviorOfEvent(labels, e)?.name === filter)
-    .sort((a, b) => a.startFrame - b.startFrame || a.endFrame - b.endFrame);
-  const predictions = events
-    .filter(isPrediction)
-    .sort((a, b) => a.startFrame - b.startFrame || a.endFrame - b.endFrame);
+  const boutsOf = (t: EventType) => boutCounts.get(t) ?? 0;
 
   const removeType = async (t: EventType) => {
     const n = labels.events.filter((e) => behaviorOfEvent(labels, e) === t).length;
@@ -469,52 +613,8 @@ export function BehaviorPanel() {
           </p>
         ) : (
           <ul className="flex flex-col">
-            {bouts.map((e, i) => (
-              <li
-                key={i}
-                className="group flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 hover:bg-accent/50"
-                onClick={() => setFrameIdx(e.startFrame)}
-                title={[e.type.name, boutWho(e), spanText(e), e.metadata.note].filter(Boolean).join(" · ")}
-                data-testid="bout-row"
-              >
-                <span
-                  className="inline-block h-2 w-2 shrink-0 rounded-sm"
-                  style={{
-                    backgroundColor: isNotType(e.type)
-                      ? NOT_LABEL_COLOR
-                      : behaviorColor(labels, e.type),
-                  }}
-                />
-                <span className={cn("min-w-0 flex-1 truncate", isNotType(e.type) && "text-muted-foreground")}>
-                  {e.type.name}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-muted-foreground">{boutWho(e)}</span>
-                <span className="shrink-0 tabular-nums">{spanText(e)}</span>
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                  aria-label="Edit bout"
-                  onClick={(ev) => {
-                    ev.stopPropagation();
-                    setEditing(e);
-                  }}
-                >
-                  <Pencil />
-                </Button>
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  className="shrink-0"
-                  aria-label="Delete bout"
-                  onClick={(ev) => {
-                    ev.stopPropagation();
-                    void commandContext.execute(DeleteBout, { bout: e });
-                  }}
-                >
-                  <Trash2 />
-                </Button>
-              </li>
+            {bouts.map((e) => (
+              <BoutRow key={eventKey(e)} bout={e} labels={labels} onEdit={editBout} />
             ))}
           </ul>
         )}
@@ -526,61 +626,14 @@ export function BehaviorPanel() {
             Predictions to review ({predictions.length.toLocaleString("en-US")})
           </div>
           <ul className="flex flex-col gap-0.5">
-            {predictions.map((e, i) => {
-              const status = predictionStatus(labels, e);
-              return (
-                <li
-                  key={i}
-                  className="cursor-pointer rounded px-1 py-0.5 hover:bg-accent/50"
-                  onClick={() => setFrameIdx(e.startFrame)}
-                  title={e.source ? `From ${e.source}` : undefined}
-                  data-testid="prediction-row"
-                >
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className="inline-block h-2 w-2 shrink-0 rounded-sm opacity-60"
-                      style={{ backgroundColor: behaviorColor(labels, e.type) }}
-                    />
-                    <span className="min-w-0 flex-1 truncate">{e.type.name}</span>
-                    <span className="min-w-0 flex-1 truncate text-muted-foreground">{boutWho(e)}</span>
-                    <span className="shrink-0 tabular-nums">{spanText(e)}</span>
-                  </div>
-                  <div className="flex items-center justify-end gap-1 pl-3.5">
-                    {e.score !== null && (
-                      <span className="mr-auto tabular-nums text-muted-foreground">
-                        {Math.round(e.score * 100)}%
-                      </span>
-                    )}
-                    {status !== "open" ? (
-                      <span className="text-muted-foreground">{STATUS_TEXT[status]}</span>
-                    ) : (
-                      <>
-                        <Button
-                          size="xs"
-                          variant="ghost"
-                          onClick={(ev) => {
-                            ev.stopPropagation();
-                            void commandContext.execute(AcceptPrediction, { prediction: e });
-                          }}
-                        >
-                          Accept
-                        </Button>
-                        <Button
-                          size="xs"
-                          variant="ghost"
-                          onClick={(ev) => {
-                            ev.stopPropagation();
-                            void commandContext.execute(RejectPrediction, { prediction: e });
-                          }}
-                        >
-                          Reject
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
+            {predictions.map((e) => (
+              <PredictionRow
+                key={eventKey(e)}
+                prediction={e}
+                labels={labels}
+                status={statuses.get(e) ?? "open"}
+              />
+            ))}
           </ul>
         </section>
       )}
