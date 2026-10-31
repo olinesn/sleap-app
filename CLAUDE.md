@@ -45,6 +45,10 @@ which runs the package.json script with the required `--isolate` flag.
 - E2E tests: `tests/e2e/`
 - Fixtures: `tests/fixtures/` (SLP files)
 
+## Big projects on the desktop build
+- On macOS, `lib.rs` turns on WebKit's `WebKitSuppressMemoryPressureHandler` default before any window opens. Without it, WebKit ends a page holding about 8 GB once it has been out of sight for about 8 minutes (`reason=ExceededMemoryLimit` in the system log) and reloads it blank, closing the project without a word.
+- A desktop save never writes straight over a project: a temp file beside it, then a rename (`writeSlpBytesAtomic`, `saveProject.ts`).
+
 ## Driving the desktop GUI (tauri-pilot)
 [`tauri-pilot`](https://github.com/mpiton/tauri-pilot) lets you (and AI agents)
 inspect and drive the **desktop** app's WebView from the CLI — Playwright can't,

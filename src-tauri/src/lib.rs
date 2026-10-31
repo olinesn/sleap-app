@@ -851,6 +851,19 @@ pub fn run() {
   // (impossible this early, but harmless either way) -- never a fatal state.
   let _ = rustls::crypto::ring::default_provider().install_default();
 
+  // macOS: WebKit ends a page's process that holds a lot of memory and has not been visible
+  // for about 8 minutes (`dispatchProcessDidTerminate: reason=ExceededMemoryLimit`), then
+  // reloads it blank. A big project holds 8-10 GB, so leaving it hidden closed the project
+  // and dropped whatever was unsaved, without a word. This default is WebKit's own switch for
+  // that watchdog, read when its first page process starts, so it must be set before any
+  // window. The system still swaps and warns when memory really runs out.
+  #[cfg(target_os = "macos")]
+  {
+    use objc2_foundation::{NSString, NSUserDefaults};
+    let key = NSString::from_str("WebKitSuppressMemoryPressureHandler");
+    NSUserDefaults::standardUserDefaults().setBool_forKey(true, &key);
+  }
+
   // Extract the first non-flag argument as a file path to open on launch.
   // Resolve to absolute path so the frontend FS plugin can read it.
   let file_arg = std::env::args()
