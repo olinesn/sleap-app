@@ -715,8 +715,8 @@ export function VideoPlayer() {
         // below re-raises it if this frame's image can't be read.
         setFrameImageMissing(false);
         // Lazy video backends: the decoder is deferred at load (open one video,
-        // not all N). Open it on first view, then read. ensureVideoBackend clears
-        // lazyPath after opening, so this whole block is skipped from then on.
+        // not all N), and a video stored as a link isn't opened at load at all.
+        // Open it on first view, then read. Once open this whole block is skipped.
         // Capture the frame count as the seekbar currently sees it BEFORE opening
         // the backend: a lazy/transcoded backend sets video.shape[0] during
         // ensureVideoBackend (not via getFrame), so reading it afterwards would
@@ -724,22 +724,17 @@ export function VideoPlayer() {
         // Seekbar's memoized totalFrames stuck (e.g. at 0 → hover always "Frame 1").
         const framesBefore = video.shape?.[0] ?? null;
         if (!video.backend) {
-          const meta = video.backendMetadata as
-            | Record<string, unknown>
-            | undefined;
-          if (typeof meta?.lazyPath === "string") {
-            // Opens by byte-range internally (RangeSource) — no whole-file read.
-            await ensureVideoBackend(video);
-          }
+          // No usable backend, at least yet (missing file, failed or slow open,
+          // unsupported codec) — blank the canvas instead of leaving the previously
+          // viewed video's frame on screen, under this video's labels, which reads
+          // as "nothing happened" when a Locate-video placeholder is the only cue.
+          frameBitmapRef.current = null;
+          setFrameDims((prev) => (prev[0] === 0 && prev[1] === 0 ? prev : [0, 0]));
+          setBitmapVersion((v) => v + 1);
+          // Opens by byte range either way — no whole-file read.
+          await ensureVideoBackend(video);
           if (cancelled) return;
           if (!video.backend) {
-            // No usable backend (missing file, failed lazy open, unsupported
-            // codec) — blank the canvas instead of leaving the previously
-            // viewed video's frame on screen, which reads as "nothing
-            // happened" when a Locate-video placeholder is the only cue.
-            frameBitmapRef.current = null;
-            setFrameDims((prev) => (prev[0] === 0 && prev[1] === 0 ? prev : [0, 0]));
-            setBitmapVersion((v) => v + 1);
             useAppStore.getState().set("frameLoading", false);
             return;
           }
@@ -3291,7 +3286,25 @@ export function VideoPlayer() {
           <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-10">
             <div className="flex flex-col items-center gap-3 pointer-events-auto max-w-md px-4 text-center">
               <Film className="h-12 w-12 text-muted-foreground/40" />
-              {videoIssue(video) === "unsupported-codec" ? (
+              {videoIssue(video) === "masked-link" ? (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    This video&apos;s link needs pasting again
+                  </p>
+                  <p className="text-xs text-muted-foreground/70">
+                    Its token or other credential isn&apos;t saved in the project.
+                    Paste the full link to stream the video, or locate a copy of it.
+                  </p>
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      useAppStore.getState().setPasteLinkVideo(video)
+                    }
+                  >
+                    Paste Link
+                  </Button>
+                </>
+              ) : videoIssue(video) === "unsupported-codec" ? (
                 <>
                   <p className="text-sm text-muted-foreground">
                     Unsupported video codec
@@ -3329,6 +3342,8 @@ export function VideoPlayer() {
                     // stays clamped to the last labeled frame).
                     useAppStore.getState().markVideoUpdated();
                     useAppStore.getState().setFrameIdx(frameIdx);
+                    // Same video and frame, so nothing else re-reads it.
+                    setReadNonce((n) => n + 1);
                   }
                 }}
               >

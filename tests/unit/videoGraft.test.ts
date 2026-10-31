@@ -22,6 +22,14 @@ describe("videoSignature", () => {
     ).toBe("a.mp4|100x720x1280x1");
   });
 
+  it("a link's query stays out, so no credential reaches the drafts manifest", () => {
+    const shape = [100, 720, 1280, 1];
+    const whole = videoSignature({ filename: "https://x.test/a.mp4?token=abc123", shape });
+    expect(whole).toBe("a.mp4|100x720x1280x1");
+    // A draft's saved copy holds the mask, and must still match its project.
+    expect(videoSignature({ filename: "https://x.test/a.mp4?token=***", shape })).toBe(whole);
+  });
+
   it("distinguishes videos that differ in shape (incl. frame count)", () => {
     expect(videoSignature({ filename: ".", shape: [50, 8, 8, 1] })).not.toBe(
       videoSignature({ filename: ".", shape: [90, 8, 8, 1] }),

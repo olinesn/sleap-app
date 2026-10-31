@@ -6,10 +6,14 @@
  * basename of the first entry, matching how the panel labels the row.
  */
 
-/** Basename (last path segment) of a video filename; first entry for sequences. */
+/**
+ * Basename (last path segment) of a video filename; first entry for sequences. No
+ * query for a link: it's not the file's name, and a row showing the end of a long
+ * one (a signature) wouldn't say which video this is.
+ */
 export function videoBasename(filename: string | string[]): string {
   const p = Array.isArray(filename) ? filename[0] ?? "" : filename;
-  const parts = p.split(/[\\/]/);
+  const parts = (/^https?:\/\//i.test(p) ? p.split(/[?#]/)[0] : p).split(/[\\/]/);
   return parts[parts.length - 1] ?? p;
 }
 
