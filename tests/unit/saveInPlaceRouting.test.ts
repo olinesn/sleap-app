@@ -25,6 +25,7 @@ import type { Labels } from "@talmolab/sleap-io.js";
 type InPlaceResult = { ok: true } | { ok: false; reason: string };
 let inPlaceResult: InPlaceResult = { ok: true };
 let inPlaceThrows = false; // simulate a mid-write failure (throw) from saveLabelsInPlace
+let writeThrows = false; // simulate a failed native write (disk full, network drop)
 let fileSizeResult = 1000; // bytes; small by default → in-memory path
 let savePath: string | null = "/picked.pkg.slp";
 
@@ -36,7 +37,9 @@ const saveLabelsInPlaceMock = vi.fn(async () => {
 const toastErrorMock = vi.fn();
 const saveEmbeddedPkgStreamingMock = vi.fn(async () => {});
 const saveSlpToBytesMock = vi.fn(async () => new Uint8Array([1, 2, 3]));
-const writeFileMock = vi.fn(async () => {});
+const writeFileMock = vi.fn(async () => {
+  if (writeThrows) throw new Error("simulated: disk full");
+});
 const showSaveDialogMock = vi.fn(async () => savePath);
 const renameFileMock = vi.fn(async () => {});
 const removeFileMock = vi.fn(async () => {});
@@ -104,6 +107,7 @@ function resetAll() {
   useAppStore.setState(useAppStore.getInitialState());
   inPlaceResult = { ok: true };
   inPlaceThrows = false;
+  writeThrows = false;
   fileSizeResult = 1000;
   savePath = "/picked.pkg.slp";
   for (const m of [
@@ -223,11 +227,46 @@ describe("saveProjectAsSlp — in-place routing", () => {
     await saveProjectAsSlp(fakeLabels(false), "plain.slp");
 
     expect(saveLabelsInPlaceMock).not.toHaveBeenCalled();
-    // Non-embedded in-place: direct write (no atomic temp+rename needed).
     expect(saveSlpToBytesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a NON-embedded save never writes straight over the file: a temp file, then a rename", async () => {
+    // Regression: a direct write truncates the project first. Killing the app in the
+    // window after that left a real 1 GB project at 303 MB and unreadable.
+    useAppStore.setState({ projectPath: "/plain.slp" });
+
+    await saveProjectAsSlp(fakeLabels(false), "plain.slp");
+
     expect(writeFileMock).toHaveBeenCalledTimes(1);
-    expect(callArg(writeFileMock, 0, 0)).toBe("/plain.slp");
+    expect(callArg(writeFileMock, 0, 0)).toBe("/plain.slp.sleap-tmp");
+    expect(renameFileMock).toHaveBeenCalledTimes(1);
+    expect(callArg(renameFileMock, 0, 0)).toBe("/plain.slp.sleap-tmp");
+    expect(callArg(renameFileMock, 0, 1)).toBe("/plain.slp");
+  });
+
+  it("a failed write leaves the original alone, removes the temp file and reports the error", async () => {
+    useAppStore.setState({ projectPath: "/plain.slp" });
+    writeThrows = true;
+
+    await saveProjectAsSlp(fakeLabels(false), "plain.slp");
+
     expect(renameFileMock).not.toHaveBeenCalled();
+    expect(removeFileMock).toHaveBeenCalledTimes(1);
+    expect(callArg(removeFileMock, 0, 0)).toBe("/plain.slp.sleap-tmp");
+    expect(toastErrorMock).toHaveBeenCalledTimes(1);
+    // Still unsaved: nothing was written.
+    expect(useAppStore.getState().projectPath).toBe("/plain.slp");
+  });
+
+  it("Save As of a NON-embedded project uses a temp file too (it may land on an existing file)", async () => {
+    useAppStore.setState({ projectPath: "/plain.slp" });
+    savePath = "/existing.slp";
+
+    await saveProjectAsSlp(fakeLabels(false), "plain.slp", /* forceDialog */ true);
+
+    expect(callArg(writeFileMock, 0, 0)).toBe("/existing.slp.sleap-tmp");
+    expect(callArg(renameFileMock, 0, 1)).toBe("/existing.slp");
+    expect(useAppStore.getState().projectPath).toBe("/existing.slp");
   });
 
   it("sets state.filename on a brand-new project's first save (no prior projectPath)", async () => {

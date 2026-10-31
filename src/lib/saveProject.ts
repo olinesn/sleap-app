@@ -165,10 +165,10 @@ async function saveBrowserInMemory(
  * write to a sibling temp on the SAME filesystem, then atomically rename it over
  * `destPath`. A `platform.writeFile` straight to `destPath` is a truncate-then-
  * write in place, so a crash / network drop / disk-full mid-write would destroy
- * the user's only copy. Used for the in-memory embedded-pkg save path (small
- * files below the streaming threshold); the streaming path already does its own
- * temp+rename. On any failure the sibling temp is best-effort deleted and the
- * original `destPath` is untouched (the rename never ran).
+ * the user's only copy. Used for every in-memory desktop save, embedded or not;
+ * the streaming path already does its own temp+rename. On any failure the sibling
+ * temp is best-effort deleted and the original `destPath` is untouched (the rename
+ * never ran).
  */
 async function writeSlpBytesAtomic(
   platform: PlatformAPI,
@@ -311,12 +311,8 @@ export async function saveProjectAsSlp(
           } else {
             console.log(`[save] Saving via in-memory backend (Tauri, in-place): ${existingPath}`);
             const bytes = await saveSlpToBytes(labels);
-            if (hasEmbeddedImages) {
-              // Never truncate the embedded original in place — write+rename atomically.
-              await writeSlpBytesAtomic(platform, existingPath, bytes);
-            } else {
-              await platform.writeFile(existingPath, bytes);
-            }
+            // Never truncate the project in place — write+rename atomically.
+            await writeSlpBytesAtomic(platform, existingPath, bytes);
           }
         }
         displayName = existingPath;
@@ -338,12 +334,8 @@ export async function saveProjectAsSlp(
         } else {
           console.log(`[save] Saving via in-memory backend (Tauri, Save As): ${savePath}`);
           const bytes = await saveSlpToBytes(labels);
-          if (hasEmbeddedImages) {
-            // Never truncate an embedded destination in place — write+rename atomically.
-            await writeSlpBytesAtomic(platform, savePath, bytes);
-          } else {
-            await platform.writeFile(savePath, bytes);
-          }
+          // Save As can land on an existing file — never truncate it in place.
+          await writeSlpBytesAtomic(platform, savePath, bytes);
         }
         store.set("projectPath", savePath);
         // Track the newly-saved name (basename) so the window title updates and,
