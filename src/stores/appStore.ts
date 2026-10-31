@@ -24,6 +24,7 @@ import type {
   InstancePlacementMethod,
 } from "../types";
 import type { StatisticGraphType, Reduction } from "@/lib/statisticSeries";
+import { fillUnknownFrameCounts } from "@/lib/unknownFrameCount";
 import { SEEKBAR_HEADER_DEFAULT_HEIGHT } from "@/lib/seekbarHeaderHeight";
 import {
   resolveProjectKey,
@@ -940,6 +941,7 @@ export const useAppStore = create<AppState>()(
 
       // Actions
       setLabels: (labels, filename, projectPath, projectFile, projectFileHandle) => {
+        fillUnknownFrameCounts(labels);
         set((state) => {
           state.labels = labels;
           state.filename = filename ?? null;
