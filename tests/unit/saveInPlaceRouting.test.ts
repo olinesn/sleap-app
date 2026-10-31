@@ -198,8 +198,10 @@ describe("saveProjectAsSlp — in-place routing", () => {
     expect(saveSlpToBytesMock).not.toHaveBeenCalled();
     expect(writeFileMock).not.toHaveBeenCalled();
     expect(renameFileMock).not.toHaveBeenCalled();
-    // The failure is surfaced to the user, not swallowed.
+    // The failure is surfaced to the user, not swallowed, with what went wrong.
     expect(toastErrorMock).toHaveBeenCalledTimes(1);
+    const [, opts] = toastErrorMock.mock.calls[0] as unknown as [string, { description: string }];
+    expect(opts.description).toContain("simulated mid-write in-place failure");
   });
 
   it("updates the store filename to the basename after a Tauri Save As (so repeated Save As keeps incrementing the version)", async () => {
