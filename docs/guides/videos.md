@@ -83,7 +83,11 @@ on another machine, and those paths stop resolving.
 - **Locate All Missing** in the **Videos** panel (shown only when videos are
   missing) finds them all at once. In Chrome / Edge you pick one folder and the
   app matches each missing video by file name anywhere inside it; elsewhere you
-  pick the files.
+  pick the files. If several videos share a file name (a campy recording names
+  every camera's video `0.mp4`), the folder names settle which file is whose, and
+  a video the app can't tell apart stays missing and the app says so. Picking
+  files can't do this, so use **Locate** on a video's row instead; on desktop, the
+  others that moved with it follow.
 - The app also looks for the file near the project and next to the old path
   before asking you.
 
