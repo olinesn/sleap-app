@@ -22,6 +22,8 @@
  * drops the tail rather than corrupting recovery.
  */
 import {
+  Embedding,
+  type Identity,
   Instance,
   PredictedInstance,
   LabeledFrame,
@@ -35,6 +37,7 @@ import {
 export interface PointDelta {
   /** Node name (from the skeleton); null if unnamed. */
   n: string | null;
+  /** NaN for a missing node, which JSON stores as null. */
   x: number;
   y: number;
   /** Visible. */
@@ -56,6 +59,18 @@ export interface InstanceDelta {
   /** Instance-level score (predicted only); null otherwise. */
   s: number | null;
   pts: PointDelta[];
+  /** Tracker's score. This and the rest are left out when the instance has none. */
+  ts?: number;
+  /** Index into base.identities, with its score and embedding. */
+  id?: number;
+  is?: number | null;
+  ie?: number[];
+  /** Category, with its score and embedding. */
+  cat?: string;
+  cs?: number | null;
+  ce?: number[];
+  /** Index in this frame of the prediction this instance was accepted from. */
+  fp?: number;
 }
 
 /** One frame's full imageless state. */
@@ -74,6 +89,7 @@ export interface BaseIndex {
   videos: Map<Video, number>;
   tracks: Map<Track, number>;
   skeletons: Map<Skeleton, number>;
+  identities: Map<Identity, number>;
 }
 
 /** Build the base→index maps once per autosave tick (O(videos+tracks+skeletons)). */
@@ -84,7 +100,9 @@ export function buildBaseIndex(labels: Labels): BaseIndex {
   labels.tracks.forEach((t, i) => tracks.set(t, i));
   const skeletons = new Map<Skeleton, number>();
   labels.skeletons.forEach((s, i) => skeletons.set(s, i));
-  return { videos, tracks, skeletons };
+  const identities = new Map<Identity, number>();
+  labels.identities.forEach((id, i) => identities.set(id, i));
+  return { videos, tracks, skeletons, identities };
 }
 
 /** Encode one labeled frame to a delta, referencing base entities by index. */
@@ -93,7 +111,14 @@ export function encodeFrameDelta(frame: LabeledFrame, index: BaseIndex): FrameDe
     v: index.videos.get(frame.video) ?? -1,
     f: frame.frameIdx,
     neg: frame.isNegative,
-    ins: frame.instances.map((inst) => encodeInstance(inst, index)),
+    ins: frame.instances.map((inst) => {
+      const encoded = encodeInstance(inst, index);
+      const accepted = inst.fromPredicted
+        ? frame.instances.indexOf(inst.fromPredicted)
+        : -1;
+      if (accepted >= 0) encoded.fp = accepted;
+      return encoded;
+    }),
   };
 }
 
@@ -112,7 +137,41 @@ function encodeInstance(inst: Instance, index: BaseIndex): InstanceDelta {
       c: pt.complete,
       s: pt.score ?? null,
     })),
+    ...encodeLabels(inst, index),
   };
+}
+
+/** What the instance carries besides its pose and track; absent keys when it has none. */
+function encodeLabels(inst: Instance, index: BaseIndex): Partial<InstanceDelta> {
+  const out: Partial<InstanceDelta> = {};
+  if (inst.trackingScore) out.ts = inst.trackingScore;
+  if (inst.identity) {
+    out.id = index.identities.get(inst.identity) ?? -1;
+    out.is = inst.identityScore ?? null;
+  }
+  if (inst.identityEmbedding) out.ie = inst.identityEmbedding.vector;
+  if (inst.category) {
+    out.cat = inst.category;
+    out.cs = inst.categoryScore ?? null;
+  }
+  if (inst.categoryEmbedding) out.ce = inst.categoryEmbedding.vector;
+  return out;
+}
+
+function restoreLabels(inst: Instance, ins: InstanceDelta, base: Labels): Instance {
+  if (ins.ts) inst.trackingScore = ins.ts;
+  const identity = ins.id != null ? base.identities[ins.id] : undefined;
+  if (identity) {
+    inst.identity = identity;
+    inst.identityScore = ins.is ?? null;
+  }
+  if (ins.ie) inst.identityEmbedding = new Embedding(ins.ie);
+  if (ins.cat) {
+    inst.category = ins.cat;
+    inst.categoryScore = ins.cs ?? null;
+  }
+  if (ins.ce) inst.categoryEmbedding = new Embedding(ins.ce);
+  return inst;
 }
 
 // --- On-disk record framing --------------------------------------------------
@@ -200,12 +259,14 @@ export function applyDeltas(base: Labels, deltas: FrameDelta[]): void {
       base.labeledFrames.push(lf);
       m.set(delta.f, lf);
     }
-    const instances: Instance[] = [];
-    for (const ins of delta.ins) {
-      const rebuilt = rebuildInstance(ins, base);
-      if (rebuilt) instances.push(rebuilt);
-    }
-    lf.instances = instances;
+    const rebuilt = delta.ins.map((ins) => rebuildInstance(ins, base));
+    delta.ins.forEach((ins, i) => {
+      const accepted = ins.fp != null ? rebuilt[ins.fp] : null;
+      if (rebuilt[i] && accepted instanceof PredictedInstance) {
+        (rebuilt[i] as Instance).fromPredicted = accepted;
+      }
+    });
+    lf.instances = rebuilt.filter((inst): inst is Instance => inst !== null);
     lf.isNegative = delta.neg;
   }
 
@@ -219,30 +280,38 @@ function rebuildInstance(ins: InstanceDelta, base: Labels): Instance | null {
   if (!skeleton) return null; // can't rebuild without a skeleton
   const track = ins.t >= 0 ? base.tracks[ins.t] ?? null : null;
   if (ins.p) {
-    return new PredictedInstance({
+    return restoreLabels(
+      new PredictedInstance({
+        skeleton,
+        points: ins.pts.map((p) => ({
+          xy: [p.x ?? NaN, p.y ?? NaN] as [number, number],
+          visible: p.v,
+          complete: p.c,
+          name: p.n ?? undefined,
+          score: p.s ?? 0,
+        })),
+        track,
+        score: ins.s ?? 0,
+      }),
+      ins,
+      base,
+    );
+  }
+  return restoreLabels(
+    new Instance({
       skeleton,
       points: ins.pts.map((p) => ({
-        xy: [p.x, p.y] as [number, number],
+        xy: [p.x ?? NaN, p.y ?? NaN] as [number, number],
         visible: p.v,
         complete: p.c,
         name: p.n ?? undefined,
-        score: p.s ?? 0,
+        score: p.s ?? undefined,
       })),
       track,
-      score: ins.s ?? 0,
-    });
-  }
-  return new Instance({
-    skeleton,
-    points: ins.pts.map((p) => ({
-      xy: [p.x, p.y] as [number, number],
-      visible: p.v,
-      complete: p.c,
-      name: p.n ?? undefined,
-      score: p.s ?? undefined,
-    })),
-    track,
-  });
+    }),
+    ins,
+    base,
+  );
 }
 
 // --- CRC32 (standard IEEE polynomial 0xEDB88320) -----------------------------
