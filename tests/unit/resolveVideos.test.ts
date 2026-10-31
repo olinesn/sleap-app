@@ -7,7 +7,7 @@
  * live E2E rather than a synthetic unit test.
  */
 
-import { describe, it, expect, afterEach } from "../bun-test";
+import { describe, it, expect, afterEach, beforeEach, vi } from "../bun-test";
 import {
   Labels,
   Video,
@@ -33,6 +33,7 @@ import {
   SUPPORTED_VIDEO_EXTS,
   locateVideoFilters,
   collectHandlesByBasename,
+  resolveAllVideoFiles,
   resolveAllVideosFromFolder,
   isImageSequenceVideo,
   relocateMissingImageFrames,
@@ -43,6 +44,8 @@ import {
   type ProxyOpenDeps,
 } from "@/lib/resolveVideos";
 import { isHdf5VideoPath } from "@/lib/hdf5VideoSource";
+import { toast } from "@/lib/notify";
+import { getPlatform } from "@/platform/index";
 import { useAppStore } from "@/stores/appStore";
 import { useTranscodeStore } from "@/stores/transcodeStore";
 import { shouldBuildScrubProxy } from "@/lib/transcode/proxyPolicy";
@@ -52,14 +55,16 @@ type MockHandle =
   | { kind: "file" }
   | {
       kind: "directory";
+      name?: string;
       entries: () => AsyncIterableIterator<[string, MockHandle]>;
     };
 function fileHandle(): MockHandle {
   return { kind: "file" };
 }
-function dirHandle(children: Record<string, MockHandle>): MockHandle {
+function dirHandle(children: Record<string, MockHandle>, name?: string): MockHandle {
   return {
     kind: "directory",
+    name,
     entries: async function* () {
       for (const [name, h] of Object.entries(children)) {
         yield [name, h] as [string, MockHandle];
@@ -1051,7 +1056,7 @@ describe("collectHandlesByBasename (folder video re-match scan)", () => {
     const target = fileHandle();
     const tree = dirHandle({ "Video.MP4": target, "other.mp4": fileHandle() });
     const found = await collectHandlesByBasename(asDir(tree), new Set(["video.mp4"]));
-    expect(found.get("video.mp4")).toBe(target);
+    expect(found.get("video.mp4")?.[0].handle).toBe(target);
     expect(found.size).toBe(1);
   });
 
@@ -1061,7 +1066,7 @@ describe("collectHandlesByBasename (folder video re-match scan)", () => {
       sub: dirHandle({ deep: dirHandle({ "clip.mp4": target }) }),
     });
     const found = await collectHandlesByBasename(asDir(tree), new Set(["clip.mp4"]));
-    expect(found.get("clip.mp4")).toBe(target);
+    expect(found.get("clip.mp4")?.[0].handle).toBe(target);
   });
 
   it("respects maxDepth (a file too deep is not found)", async () => {
@@ -1091,9 +1096,25 @@ describe("collectHandlesByBasename (folder video re-match scan)", () => {
       asDir(tree),
       new Set(["a.mp4", "b.mp4"]),
     );
-    expect(found.get("a.mp4")).toBe(a);
-    expect(found.get("b.mp4")).toBe(b);
+    expect(found.get("a.mp4")?.[0].handle).toBe(a);
+    expect(found.get("b.mp4")?.[0].handle).toBe(b);
     expect(found.size).toBe(2);
+  });
+
+  it("keeps every same-named file, with its path under the picked folder", async () => {
+    const cam1 = fileHandle();
+    const cam2 = fileHandle();
+    const tree = dirHandle({
+      Cam1: dirHandle({ "0.mp4": cam1 }),
+      nested: dirHandle({ Cam2: dirHandle({ "0.MP4": cam2 }) }),
+    });
+    const files = (await collectHandlesByBasename(asDir(tree), new Set(["0.mp4"]))).get("0.mp4");
+    expect(files?.map((f) => f.segments)).toEqual([
+      ["Cam1", "0.mp4"],
+      ["nested", "Cam2", "0.MP4"],
+    ]);
+    expect(files?.[0].handle).toBe(cam1);
+    expect(files?.[1].handle).toBe(cam2);
   });
 });
 
@@ -1117,6 +1138,304 @@ describe("resolveAllVideosFromFolder — image-sequence safety", () => {
     expect(count).toBe(0);
     expect(imgSeq.filename).toBe(before);
     expect(imgSeq.backend).toBeNull();
+  });
+});
+
+// The picked folder's files, openable for real. `.seq` because it is the only
+// format that decodes under bun's runner (campy's are `0.mp4`; matching never
+// looks at the extension). Give each file its own width: `video.shape` then
+// shows which file a video was given.
+function seqFile(width: number, name = "0.seq"): File {
+  return buildSeqFile({ name, width, height: 2, color: false, pixelValue: 1 });
+}
+function seqHandle(width: number, name = "0.seq"): MockHandle {
+  const file = seqFile(width, name);
+  return Object.assign(fileHandle(), { getFile: async () => file });
+}
+function storedAt(filename: string): Video {
+  return new Video({ filename, backend: null, openBackend: false });
+}
+/** The width of the file a video was given, or null while it is still missing. */
+function widthOf(video: Video): number | null {
+  return isVideoMissing(video) ? null : (video.shape?.[2] ?? null);
+}
+/** The one warning toast shown, title and description together. */
+function warningShown(warning: { mock: { calls: unknown[][] } }): string {
+  expect(warning.mock.calls.length).toBe(1);
+  const [title, data] = warning.mock.calls[0] as [string, { description: string }];
+  return `${title}\n${data.description}`;
+}
+
+describe("resolveAllVideosFromFolder — videos that share a file name", () => {
+  const CAMERAS = [1, 2, 3, 4, 5, 6, 7, 8];
+  const pickFolder = (tree: MockHandle) => {
+    (window as unknown as Record<string, unknown>).showDirectoryPicker = async () => tree;
+  };
+  let warning: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warning = vi.spyOn(toast, "warning");
+  });
+  afterEach(() => {
+    warning.mockRestore();
+    delete (window as unknown as Record<string, unknown>).showDirectoryPicker;
+  });
+
+  it("gives each camera of a campy recording the file from its own folder", async () => {
+    const videos = CAMERAS.map((i) => storedAt(`rec/Cam${i}/0.seq`));
+    pickFolder(
+      dirHandle(
+        Object.fromEntries(
+          CAMERAS.map((i) => [`Cam${i}`, dirHandle({ "0.seq": seqHandle(10 + i) })]),
+        ),
+      ),
+    );
+
+    expect(await resolveAllVideosFromFolder(videos)).toBe(8);
+    expect(videos.map(widthOf)).toEqual(CAMERAS.map((i) => 10 + i));
+    expect(warning).not.toHaveBeenCalled();
+  });
+
+  it("tells recordings apart when only a higher folder differs", async () => {
+    const videos = [storedAt("/old/s1/Cam1/0.seq"), storedAt("/old/s2/Cam1/0.seq")];
+    pickFolder(
+      dirHandle({
+        s1: dirHandle({ Cam1: dirHandle({ "0.seq": seqHandle(11) }) }),
+        s2: dirHandle({ Cam1: dirHandle({ "0.seq": seqHandle(12) }) }),
+      }),
+    );
+
+    expect(await resolveAllVideosFromFolder(videos)).toBe(2);
+    expect(videos.map(widthOf)).toEqual([11, 12]);
+  });
+
+  it("matches a Windows path and folder names in another case", async () => {
+    const videos = [
+      storedAt("C:\\data\\rec\\CAM1\\0.seq"),
+      storedAt("C:\\data\\rec\\CAM2\\0.seq"),
+    ];
+    pickFolder(
+      dirHandle({
+        cam1: dirHandle({ "0.SEQ": seqHandle(11, "0.SEQ") }),
+        cam2: dirHandle({ "0.SEQ": seqHandle(12, "0.SEQ") }),
+      }),
+    );
+
+    expect(await resolveAllVideosFromFolder(videos)).toBe(2);
+    expect(videos.map(widthOf)).toEqual([11, 12]);
+  });
+
+  it("gives a lone video the same-named file closest to its stored path, not the first found", async () => {
+    const video = storedAt("/old/rec/Cam2/clip.seq");
+    pickFolder(
+      dirHandle({
+        backup: dirHandle({ "clip.seq": seqHandle(20, "clip.seq") }),
+        rec: dirHandle({ Cam2: dirHandle({ "clip.seq": seqHandle(30, "clip.seq") }) }),
+      }),
+    );
+
+    expect(await resolveAllVideosFromFolder([video])).toBe(1);
+    expect(widthOf(video)).toBe(30);
+  });
+
+  it("never gives one file to two videos with different stored paths", async () => {
+    const videos = [storedAt("rec/Cam1/0.seq"), storedAt("rec/Cam2/0.seq")];
+    pickFolder(dirHandle({ "0.seq": seqHandle(11) }));
+
+    expect(await resolveAllVideosFromFolder(videos)).toBe(0);
+    expect(videos.map(widthOf)).toEqual([null, null]);
+    expect(warningShown(warning)).toMatch(/2 videos.*\n.*told apart/);
+  });
+
+  it("leaves a video missing when two files match it equally well", async () => {
+    const video = storedAt("/old/x/clip.seq");
+    pickFolder(
+      dirHandle({
+        a: dirHandle({ "clip.seq": seqHandle(20, "clip.seq") }),
+        b: dirHandle({ "clip.seq": seqHandle(30, "clip.seq") }),
+      }),
+    );
+
+    expect(await resolveAllVideosFromFolder([video])).toBe(0);
+    expect(widthOf(video)).toBeNull();
+    expect(warningShown(warning)).toMatch(/1 video .*\n.*told apart/);
+  });
+
+  it("gives a file to the video it fits best; the others are simply not in the folder", async () => {
+    const videos = [
+      storedAt("rec/Cam1/0.seq"),
+      storedAt("rec/Cam2/0.seq"),
+      storedAt("rec/Cam3/0.seq"),
+    ];
+    pickFolder(dirHandle({ Cam2: dirHandle({ "0.seq": seqHandle(12) }) }));
+
+    expect(await resolveAllVideosFromFolder(videos)).toBe(1);
+    expect(videos.map(widthOf)).toEqual([null, 12, null]);
+    const shown = warningShown(warning);
+    expect(shown).toContain("2 videos not found in that folder");
+    expect(shown).not.toContain("told apart");
+  });
+
+  it("never falls back to a second-best file left over after a better match took the first", async () => {
+    const videos = [storedAt("rec/Cam1/0.seq"), storedAt("rec/Cam2/0.seq")];
+    pickFolder(
+      dirHandle({
+        Cam1: dirHandle({ "0.seq": seqHandle(11) }),
+        Cam3: dirHandle({ "0.seq": seqHandle(13) }),
+      }),
+    );
+
+    expect(await resolveAllVideosFromFolder(videos)).toBe(1);
+    expect(videos.map(widthOf)).toEqual([11, null]);
+    expect(warningShown(warning)).toContain("told apart");
+  });
+
+  it("counts the picked folder's own name, so picking one camera's folder locates that camera", async () => {
+    const videos = [
+      storedAt("rec/Cam1/0.seq"),
+      storedAt("rec/Cam2/0.seq"),
+      storedAt("rec/Cam3/0.seq"),
+    ];
+    pickFolder(dirHandle({ "0.seq": seqHandle(12) }, "Cam2"));
+
+    expect(await resolveAllVideosFromFolder(videos)).toBe(1);
+    expect(videos.map(widthOf)).toEqual([null, 12, null]);
+  });
+
+  it("says how many are not in the folder and how many could not be told apart", async () => {
+    const videos = [
+      storedAt("rec/Cam1/0.seq"),
+      storedAt("rec/Cam2/0.seq"),
+      storedAt("rec/Cam3/other.seq"),
+    ];
+    pickFolder(dirHandle({ "0.seq": seqHandle(11) }));
+
+    expect(await resolveAllVideosFromFolder(videos)).toBe(0);
+    const shown = warningShown(warning);
+    expect(shown).toContain("3 videos");
+    expect(shown).toContain("1 not found in that folder");
+    expect(shown).toContain("2 could not be told apart");
+  });
+
+  it("still shares a file between videos stored at the same path", async () => {
+    const videos = [storedAt("rec/Cam1/0.seq"), storedAt("rec\\Cam1\\0.seq")];
+    pickFolder(dirHandle({ Cam1: dirHandle({ "0.seq": seqHandle(11) }) }));
+
+    expect(await resolveAllVideosFromFolder(videos)).toBe(2);
+    expect(videos.map(widthOf)).toEqual([11, 11]);
+    expect(warning).not.toHaveBeenCalled();
+  });
+
+  it("still matches differently named videos by file name alone, anywhere in the folder", async () => {
+    const videos = [storedAt("/old/a/one.seq"), storedAt("/old/b/two.seq")];
+    pickFolder(
+      dirHandle({
+        "one.seq": seqHandle(11, "one.seq"),
+        moved: dirHandle({ "two.seq": seqHandle(12, "two.seq") }),
+      }),
+    );
+
+    expect(await resolveAllVideosFromFolder(videos)).toBe(2);
+    expect(videos.map(widthOf)).toEqual([11, 12]);
+    expect(warning).not.toHaveBeenCalled();
+  });
+
+  it("keeps the old message when a video is simply not in the folder", async () => {
+    const video = storedAt("/old/x/clip.seq");
+    pickFolder(dirHandle({ "other.seq": seqHandle(11, "other.seq") }));
+
+    expect(await resolveAllVideosFromFolder([video])).toBe(0);
+    expect(warningShown(warning)).toBe(
+      "1 video not found in that folder\nPick a folder that contains the missing video file(s).",
+    );
+  });
+});
+
+describe("resolveAllVideoFiles — videos that share a file name", () => {
+  let dialog: ReturnType<typeof vi.spyOn>;
+  let warning: ReturnType<typeof vi.spyOn>;
+  const pick = async (picked: string[] | File[]) => {
+    dialog = vi.spyOn(await getPlatform(), "showOpenDialog");
+    dialog.mockResolvedValue(picked as never);
+  };
+  beforeEach(() => {
+    warning = vi.spyOn(toast, "warning");
+  });
+  afterEach(() => {
+    warning.mockRestore();
+    dialog?.mockRestore();
+  });
+
+  it("assigns none of them from Locate All Missing, and points to a browser with a folder pick", async () => {
+    // No showDirectoryPicker here, so this is how Firefox or Safari reach the picker.
+    const videos = [storedAt("rec/Cam1/0.seq"), storedAt("rec/Cam2/0.seq")];
+    await pick([seqFile(11)]);
+
+    expect(await resolveAllVideosFromFolder(videos)).toBe(0);
+    expect(videos.map(widthOf)).toEqual([null, null]);
+    expect(dialog).not.toHaveBeenCalled(); // nothing picked could be used
+    const shown = warningShown(warning);
+    expect(shown).toContain("2 videos could not be matched");
+    expect(shown).toMatch(/Locate All Missing in Chrome or Edge.*folder/);
+  });
+
+  it("still matches the other videos in the same pick", async () => {
+    const videos = [
+      storedAt("rec/Cam1/0.seq"),
+      storedAt("rec/Cam2/0.seq"),
+      storedAt("rec/other/clip.seq"),
+    ];
+    await pick([seqFile(11), seqFile(12, "clip.seq")]);
+
+    expect(await resolveAllVideoFiles(videos)).toBe(1);
+    expect(videos.map(widthOf)).toEqual([null, null, 12]);
+    const shown = warningShown(warning);
+    expect(shown).toContain("2 videos could not be matched");
+    expect(shown).toContain("Locate All Missing");
+  });
+
+  it("on desktop, whose Locate All Missing is this picker, points to a video's own Locate", async () => {
+    const platform = await getPlatform();
+    const videos = [storedAt("/old/rec/Cam1/0.mp4"), storedAt("/old/rec/Cam2/0.mp4")];
+    await pick(["/new/rec/Cam1/0.mp4"]);
+    platform.isTauri = true;
+    try {
+      expect(await resolveAllVideosFromFolder(videos)).toBe(0);
+    } finally {
+      platform.isTauri = false;
+    }
+
+    expect(videos.map(isVideoMissing)).toEqual([true, true]);
+    expect(videos[0].filename).toBe("/old/rec/Cam1/0.mp4"); // not pointed at the pick
+    const shown = warningShown(warning);
+    expect(shown).toContain("Locate on one video's row");
+    expect(shown).not.toContain("Chrome");
+  });
+
+  it("still shares a picked file between videos stored at the same path", async () => {
+    const videos = [storedAt("rec/Cam1/0.seq"), storedAt("rec\\Cam1\\0.seq")];
+    await pick([seqFile(11)]);
+
+    expect(await resolveAllVideoFiles(videos)).toBe(2);
+    expect(videos.map(widthOf)).toEqual([11, 11]);
+    expect(warning).not.toHaveBeenCalled();
+  });
+
+  it("still gives one missing video the one picked file, whatever its name", async () => {
+    const video = storedAt("rec/Cam1/0.seq");
+    await pick([seqFile(11, "renamed.seq")]);
+
+    expect(await resolveAllVideoFiles([video])).toBe(1);
+    expect(widthOf(video)).toBe(11);
+  });
+
+  it("keeps the old message when picked files simply don't match", async () => {
+    const videos = [storedAt("a/one.seq"), storedAt("b/two.seq")];
+    await pick([seqFile(11, "three.seq")]);
+
+    expect(await resolveAllVideoFiles(videos)).toBe(0);
+    expect(warningShown(warning)).toBe(
+      "2 videos could not be matched\nAnnotations will be visible but some video frames will be blank.",
+    );
   });
 });
 
