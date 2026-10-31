@@ -36,10 +36,14 @@ const saveLabelsInPlaceMock = vi.fn(async () => {
 });
 const toastErrorMock = vi.fn();
 const saveEmbeddedPkgStreamingMock = vi.fn(async () => {});
-const saveSlpToBytesMock = vi.fn(async () => new Uint8Array([1, 2, 3]));
-const writeFileMock = vi.fn(async () => {
+let savedBytes = new Uint8Array([1, 2, 3]);
+const saveSlpToBytesMock = vi.fn(async () => savedBytes);
+const writeFileMock = vi.fn(async () => {});
+const writeOpenMock = vi.fn(async () => {});
+const writeAtMock = vi.fn(async () => {
   if (writeThrows) throw new Error("simulated: disk full");
 });
+const writeCloseMock = vi.fn(async () => {});
 const showSaveDialogMock = vi.fn(async () => savePath);
 const renameFileMock = vi.fn(async () => {});
 const removeFileMock = vi.fn(async () => {});
@@ -63,6 +67,9 @@ vi.mock("@/lib/nativeWrite", () => ({
   renameFile: renameFileMock,
   removeFile: removeFileMock,
   withNativeWriteHandle: <T,>(work: () => Promise<T>) => work(),
+  writeOpen: writeOpenMock,
+  writeAt: writeAtMock,
+  writeClose: writeCloseMock,
 }));
 vi.mock("@/platform/index", () => ({
   getPlatform: async () => ({
@@ -108,6 +115,7 @@ function resetAll() {
   inPlaceResult = { ok: true };
   inPlaceThrows = false;
   writeThrows = false;
+  savedBytes = new Uint8Array([1, 2, 3]);
   fileSizeResult = 1000;
   savePath = "/picked.pkg.slp";
   for (const m of [
@@ -115,6 +123,9 @@ function resetAll() {
     saveEmbeddedPkgStreamingMock,
     saveSlpToBytesMock,
     writeFileMock,
+    writeOpenMock,
+    writeAtMock,
+    writeCloseMock,
     showSaveDialogMock,
     renameFileMock,
     removeFileMock,
@@ -153,7 +164,7 @@ describe("saveProjectAsSlp — in-place routing", () => {
     expect(saveEmbeddedPkgStreamingMock).not.toHaveBeenCalled();
     // In-memory embedded path: serialize + atomic write-temp-then-rename.
     expect(saveSlpToBytesMock).toHaveBeenCalledTimes(1);
-    expect(writeFileMock).toHaveBeenCalledTimes(1);
+    expect(writeAtMock).toHaveBeenCalledTimes(1);
     expect(renameFileMock).toHaveBeenCalledTimes(1);
     expect(callArg(renameFileMock, 0, 1)).toBe("/proj.pkg.slp"); // renamed over the original
   });
@@ -237,8 +248,9 @@ describe("saveProjectAsSlp — in-place routing", () => {
 
     await saveProjectAsSlp(fakeLabels(false), "plain.slp");
 
-    expect(writeFileMock).toHaveBeenCalledTimes(1);
-    expect(callArg(writeFileMock, 0, 0)).toBe("/plain.slp.sleap-tmp");
+    expect(writeFileMock).not.toHaveBeenCalled();
+    expect(callArg(writeOpenMock, 0, 0)).toBe("/plain.slp.sleap-tmp");
+    expect(writeCloseMock).toHaveBeenCalledTimes(1);
     expect(renameFileMock).toHaveBeenCalledTimes(1);
     expect(callArg(renameFileMock, 0, 0)).toBe("/plain.slp.sleap-tmp");
     expect(callArg(renameFileMock, 0, 1)).toBe("/plain.slp");
@@ -250,6 +262,7 @@ describe("saveProjectAsSlp — in-place routing", () => {
 
     await saveProjectAsSlp(fakeLabels(false), "plain.slp");
 
+    expect(writeCloseMock).toHaveBeenCalledTimes(1);
     expect(renameFileMock).not.toHaveBeenCalled();
     expect(removeFileMock).toHaveBeenCalledTimes(1);
     expect(callArg(removeFileMock, 0, 0)).toBe("/plain.slp.sleap-tmp");
@@ -258,13 +271,28 @@ describe("saveProjectAsSlp — in-place routing", () => {
     expect(useAppStore.getState().projectPath).toBe("/plain.slp");
   });
 
+  it("writes a big file in pieces, in order, every byte", async () => {
+    useAppStore.setState({ projectPath: "/plain.slp" });
+    savedBytes = new Uint8Array(65 * 1024 * 1024);
+    savedBytes[savedBytes.length - 1] = 7;
+
+    await saveProjectAsSlp(fakeLabels(false), "plain.slp");
+
+    const calls = writeAtMock.mock.calls as unknown as [number, Uint8Array][];
+    const MB = 1024 * 1024;
+    expect(calls.map(([at]) => at)).toEqual([0, 32 * MB, 64 * MB]);
+    expect(calls.map(([, b]) => b.length)).toEqual([32 * MB, 32 * MB, MB]);
+    expect(calls[2][1][MB - 1]).toBe(7);
+    expect(renameFileMock).toHaveBeenCalledTimes(1);
+  });
+
   it("Save As of a NON-embedded project uses a temp file too (it may land on an existing file)", async () => {
     useAppStore.setState({ projectPath: "/plain.slp" });
     savePath = "/existing.slp";
 
     await saveProjectAsSlp(fakeLabels(false), "plain.slp", /* forceDialog */ true);
 
-    expect(callArg(writeFileMock, 0, 0)).toBe("/existing.slp.sleap-tmp");
+    expect(callArg(writeOpenMock, 0, 0)).toBe("/existing.slp.sleap-tmp");
     expect(callArg(renameFileMock, 0, 1)).toBe("/existing.slp");
     expect(useAppStore.getState().projectPath).toBe("/existing.slp");
   });

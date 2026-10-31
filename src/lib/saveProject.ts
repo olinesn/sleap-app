@@ -9,7 +9,6 @@ import type { Labels } from "@talmolab/sleap-io.js";
 import { saveSlpToBytes } from "@talmolab/sleap-io.js";
 import { useAppStore } from "../stores/appStore";
 import { toast } from "@/lib/notify";
-import type { PlatformAPI } from "../platform/index";
 import { getPlatform } from "../platform/index";
 import {
   saveEmbeddedPkgStreaming,
@@ -21,7 +20,14 @@ import {
   decideBrowserSaveAction,
 } from "@/lib/saveRouting";
 import { fileSize } from "@/lib/nativeRange";
-import { renameFile, removeFile } from "@/lib/nativeWrite";
+import {
+  renameFile,
+  removeFile,
+  withNativeWriteHandle,
+  writeAt,
+  writeClose,
+  writeOpen,
+} from "@/lib/nativeWrite";
 import {
   saveEmbeddedPkgOpfs,
   isOpfsSaveSupported,
@@ -161,6 +167,13 @@ async function saveBrowserInMemory(
 }
 
 /**
+ * The most one message to the native side carries. A whole file in one message holds several
+ * copies of it in memory on the way (1.2 GB took 3 GB more in the app's process alone) and
+ * holds the page for the whole write.
+ */
+const NATIVE_WRITE_CHUNK_BYTES = 32 * 1024 * 1024;
+
+/**
  * Crash-safe write of already-serialized SLP `bytes` over `destPath` (desktop):
  * write to a sibling temp on the SAME filesystem, then atomically rename it over
  * `destPath`. A `platform.writeFile` straight to `destPath` is a truncate-then-
@@ -171,13 +184,21 @@ async function saveBrowserInMemory(
  * never ran).
  */
 async function writeSlpBytesAtomic(
-  platform: PlatformAPI,
   destPath: string,
   bytes: Uint8Array
 ): Promise<void> {
   const tempPath = tempPathFor(destPath);
   try {
-    await platform.writeFile(tempPath, bytes);
+    await withNativeWriteHandle(async () => {
+      await writeOpen(tempPath);
+      try {
+        for (let at = 0; at < bytes.length; at += NATIVE_WRITE_CHUNK_BYTES) {
+          await writeAt(at, bytes.subarray(at, at + NATIVE_WRITE_CHUNK_BYTES));
+        }
+      } finally {
+        await writeClose();
+      }
+    });
     await renameFile(tempPath, destPath);
   } catch (err) {
     await removeFile(tempPath).catch(() => {});
@@ -312,7 +333,7 @@ export async function saveProjectAsSlp(
             console.log(`[save] Saving via in-memory backend (Tauri, in-place): ${existingPath}`);
             const bytes = await saveSlpToBytes(labels);
             // Never truncate the project in place — write+rename atomically.
-            await writeSlpBytesAtomic(platform, existingPath, bytes);
+            await writeSlpBytesAtomic(existingPath, bytes);
           }
         }
         displayName = existingPath;
@@ -335,7 +356,7 @@ export async function saveProjectAsSlp(
           console.log(`[save] Saving via in-memory backend (Tauri, Save As): ${savePath}`);
           const bytes = await saveSlpToBytes(labels);
           // Save As can land on an existing file — never truncate it in place.
-          await writeSlpBytesAtomic(platform, savePath, bytes);
+          await writeSlpBytesAtomic(savePath, bytes);
         }
         store.set("projectPath", savePath);
         // Track the newly-saved name (basename) so the window title updates and,
