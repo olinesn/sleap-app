@@ -14,6 +14,7 @@ import {
   GrayscaleVideoBackend,
   Video,
   createVideoBackend,
+  redactUrl,
   WorkerMp4BoxBackend,
   isWorkerDecodeAvailable,
   type VideoBackend,
@@ -68,7 +69,8 @@ import {
 /** Extract just the basename from a path or filename. */
 export function getBasename(filename: string | string[]): string {
   const f = Array.isArray(filename) ? filename[0] ?? "" : filename;
-  const parts = f.split(/[\\/]/);
+  // A masked link's query is no part of any file's name, and Locate goes by name.
+  const parts = (isMaskedVideoUrl(f) ? f.split(/[?#]/)[0] : f).split(/[\\/]/);
   return parts[parts.length - 1] ?? f;
 }
 
@@ -380,12 +382,61 @@ export function isFetchableUrl(filename: string | string[]): boolean {
   return /^(https?:|blob:|data:)/i.test(f);
 }
 
-/** Check if a video is missing its backend (unresolved external file). */
+const HTTP_URL = /^https?:\/\//i;
+/** What sleap-io.js saves in place of a URL's credential; Python percent-encodes it. */
+const URL_MASK = "(?:\\*\\*\\*|%2A%2A%2A)";
+const MASKED_URL_PARAM = new RegExp(`[?&#][^=&#]*=${URL_MASK}(?=[&#]|$)`, "i");
+const MASKED_URL_USERINFO = new RegExp(`^https?://${URL_MASK}(?::${URL_MASK})?@`, "i");
+
+/**
+ * Whether a stored video name is an http(s) link sleap-io.js masked when it saved:
+ * `?token=***` for a credential in the query, `***:***@` for a password. Goes by
+ * the mask and not by a list of names, so a name added to sleap-io.js's list needs
+ * no change here. Pure.
+ */
+export function isMaskedVideoUrl(filename: string | string[]): boolean {
+  if (typeof filename !== "string" || !HTTP_URL.test(filename)) return false;
+  return MASKED_URL_PARAM.test(filename) || MASKED_URL_USERINFO.test(filename);
+}
+
+/**
+ * Whether a save would mask `url`, by sleap-io.js's own list of credentials. Used
+ * to tell someone adding a link that they'll have to paste it again. Pure.
+ */
+export function urlHoldsCredential(url: string): boolean {
+  try {
+    return redactUrl(url) !== new URL(url).href;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The name a video stored as `url` goes by: the link as a save writes it, every other
+ * character as given. The whole link is only ever in the open backend. A video's name
+ * reaches the drafts manifest, the JSON Package, merges and remote workers, none of
+ * which should get a credential or need one. Pure.
+ */
+export function savedLinkName(url: string): string {
+  return urlHoldsCredential(url) ? redactUrl(url) : url;
+}
+
+/** Whether two links save as the same name: they differ in a credential at most. */
+export function sameLinkOnceSaved(saved: string | string[], url: string): boolean {
+  return typeof saved === "string" && redactUrl(saved) === redactUrl(url);
+}
+
+/**
+ * Check if a video is missing its backend (unresolved external file). A link is
+ * present, whether or not it will open, unless it's masked: then only the person
+ * who has the whole link can bring the video back.
+ */
 export function isVideoMissing(video: Video): boolean {
   if (video.hasEmbeddedImages) return false;
   // Lazily resolved: file located, decoder deferred until first view. Present.
   if (typeof getLazyPath(video) === "string") return false;
-  return video.backend === null && !isFetchableUrl(video.filename);
+  if (video.backend !== null) return false;
+  return !isFetchableUrl(video.filename) || isMaskedVideoUrl(video.filename);
 }
 
 /** The resolved-but-not-yet-opened path for a lazily deferred video, if any. */
@@ -395,13 +446,35 @@ function getLazyPath(video: Video): string | undefined {
   return typeof p === "string" ? p : undefined;
 }
 
+/** Opens in flight: a frame read during a slow open waits for it, not starting another. */
+const deferredOpens = new WeakMap<Video, Promise<boolean>>();
+
 /**
- * Open a lazily-deferred video's backend on first use. When
- * {@link resolveExternalVideos} runs with `lazy`, it records the resolved path
+ * Open a deferred video's backend on first use: a located file
+ * ({@link openLazyPath}) or a stored link ({@link openStoredLink}). No-op if
+ * already open or nothing is deferred. Resolves when the open has finished, so a
+ * video's backend is never there half-open (see {@link probeAndAssignBackend}).
+ */
+export async function ensureVideoBackend(video: Video): Promise<boolean> {
+  if (video.backend) return true;
+  const inFlight = deferredOpens.get(video);
+  if (inFlight) return inFlight;
+  const lazyPath = getLazyPath(video);
+  const open = lazyPath ? openLazyPath(video, lazyPath) : openStoredLink(video);
+  deferredOpens.set(video, open);
+  try {
+    return await open;
+  } finally {
+    deferredOpens.delete(video);
+  }
+}
+
+/**
+ * When {@link resolveExternalVideos} runs with `lazy`, it records the resolved path
  * in `backendMetadata.lazyPath` without opening the file; this opens the decoder
- * on demand (the LUC3D pattern). No-op if already open or not deferred. Clears
- * `lazyPath` after the attempt (success or failure), so a video that fails to
- * decode falls through to the normal missing/unsupported flow.
+ * on demand (the LUC3D pattern). Clears `lazyPath` after the attempt (success or
+ * failure), so a video that fails to decode falls through to the normal
+ * missing/unsupported flow.
  *
  * Opens via {@link assignVideoBackendFromPath} — a byte-range (RangeSource)
  * open, NOT a whole-file read — so deferring a multi-GB external video and then
@@ -412,9 +485,7 @@ function getLazyPath(video: Video): string | undefined {
  * for the eager/locate paths — the lazy feature (#195) landed minutes later and
  * opened the old whole-file way.)
  */
-export async function ensureVideoBackend(video: Video): Promise<boolean> {
-  const lazyPath = getLazyPath(video);
-  if (video.backend || !lazyPath) return video.backend !== null;
+async function openLazyPath(video: Video, lazyPath: string): Promise<boolean> {
   try {
     return await assignVideoBackendFromPath(video, lazyPath, { silent: true });
   } finally {
@@ -423,17 +494,44 @@ export async function ensureVideoBackend(video: Video): Promise<boolean> {
 }
 
 /**
+ * Re-stream a video the project stores as a link. The streaming `.slp` reader
+ * (what `loadSlp` uses wherever there are Workers) leaves every external video
+ * closed, so this is what keeps "re-streamed on reload" true. On first view, like
+ * a located file: a project with many linked videos stays quick to open.
+ *
+ * Tried once per video: a link that fails records `backendError` and isn't asked
+ * again on every frame read. A masked link isn't tried at all, since it can't work
+ * and the request would only be refused.
+ */
+async function openStoredLink(video: Video): Promise<boolean> {
+  const url = video.filename;
+  if (
+    typeof url !== "string" ||
+    !HTTP_URL.test(url) ||
+    !isSupportedVideoUrl(url) ||
+    isMaskedVideoUrl(url) ||
+    video.backendError
+  ) {
+    return false;
+  }
+  return assignVideoBackendFromUrl(video, url, { silent: true });
+}
+
+/**
  * Why a video has no usable backend, for actionable messaging:
  * - "unsupported-codec": the file was found and read, but its codec can't be
  *   decoded here (e.g. 10-bit HEVC, which WebCodecs rejects in the browser and
  *   the Linux WebView). The fix is to transcode, not to relocate.
  * - "missing": the file couldn't be located.
+ * - "masked-link": a link saved without its credential ({@link isMaskedVideoUrl}).
+ *   The fix is to paste the link again, whatever the failed open recorded.
  * Returns null when the video is fine (has a backend), is an image sequence
  * awaiting a folder, or is a fetchable URL.
  */
-export type VideoIssue = "missing" | "unsupported-codec" | null;
+export type VideoIssue = "missing" | "unsupported-codec" | "masked-link" | null;
 export function videoIssue(video: Video): VideoIssue {
   if (!isVideoMissing(video)) return null;
+  if (isMaskedVideoUrl(video.filename)) return "masked-link";
   const kind = video.backendError?.kind;
   if (kind === "decode" || kind === "unsupported-format") {
     return "unsupported-codec";
@@ -656,6 +754,8 @@ export async function resolveExternalVideos(
     // candidate loop, so a stale/coincidental mapping never adopts a wrong file.
     const savedSwaps = useAppStore.getState().videoPrefixSwaps;
     for (const video of unresolvedVideos) {
+      // A masked link names no file to look for; its toast is below.
+      if (isMaskedVideoUrl(video.filename)) continue;
       // Image sequences (ImageVideo) never go through the single-file (mp4box)
       // path below (it would hang on a JPEG). The SLP reader's FsResolver opens
       // resolvable ones during loadSlp, but it does NOT graft RELATIVE frame
@@ -735,6 +835,17 @@ export async function resolveExternalVideos(
     (v) => videoIssue(v) === "unsupported-codec"
   );
   const notFound = stillMissing.filter((v) => videoIssue(v) === "missing");
+  const maskedLinks = stillMissing.filter((v) => videoIssue(v) === "masked-link");
+  if (maskedLinks.length > 0) {
+    const n = maskedLinks.length;
+    toast.info(
+      `${n} video link${n > 1 ? "s need" : " needs"} pasting again. Use the Videos panel.`,
+      {
+        description:
+          "Tokens and other credentials aren't saved in the project. Annotations will be visible but video frames will be blank.",
+      }
+    );
+  }
   if (notFound.length > 0) {
     const n = notFound.length;
     toast.info(
@@ -1903,6 +2014,8 @@ export interface AssignBackendOptions {
    * the open. See {@link Hdf5VideoHints.pickDataset}.
    */
   pickHdf5Dataset?: (datasets: string[]) => Promise<string | null>;
+  /** Give up on the open after this long. Unset: wait for as long as it takes. */
+  timeoutMs?: number;
 }
 
 /**
@@ -1963,6 +2076,36 @@ async function firstProbeIndex(backend: VideoBackend): Promise<number> {
   return b.frameNumbers?.[0] ?? 0;
 }
 
+/** Build a backend and read a frame from it; throws if there's no frame to read. */
+async function createAndProbe(
+  create: () => Promise<VideoBackend>
+): Promise<VideoBackend> {
+  const backend = await create();
+  const probeIdx = await firstProbeIndex(backend);
+  const frame = await backend.getFrame(probeIdx);
+  if (!frame) {
+    throw new Error(
+      probeIdx === 0
+        ? "could not decode the first video frame"
+        : `could not decode frame ${probeIdx}`
+    );
+  }
+  return backend;
+}
+
+/** `work`, or a rejection once `ms` have passed without an answer. Unset: just `work`. */
+function withinTime<T>(work: Promise<T>, ms: number | undefined): Promise<T> {
+  if (ms === undefined) return work;
+  let timer: ReturnType<typeof setTimeout>;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`no video data after ${ms / 1000} seconds`)),
+      ms
+    );
+  });
+  return Promise.race([work, expired]).finally(() => clearTimeout(timer));
+}
+
 /**
  * Attach a freshly-built backend to a Video, probing a frame to validate decode
  * and capture shape/fps (see {@link firstProbeIndex} for which frame). Shared by
@@ -1988,21 +2131,14 @@ async function probeAndAssignBackend(
   opts?: AssignBackendOptions
 ): Promise<boolean> {
   try {
-    const backend = await create();
-    video.backend = backend;
-    const probeIdx = await firstProbeIndex(backend);
-    const frame = await backend.getFrame(probeIdx);
-    if (!frame) {
-      throw new Error(
-        probeIdx === 0
-          ? "could not decode the first video frame"
-          : `could not decode frame ${probeIdx}`
-      );
-    }
+    const backend = await withinTime(createAndProbe(create), opts?.timeoutMs);
     if (opts?.grayscale !== undefined) {
       (video.backendMetadata as Record<string, unknown>).grayscale =
         opts.grayscale;
     }
+    // Only now: a frame read on this video during the probe would supersede it
+    // (an MP4 backend drops all but the newest read), and the probe would fail.
+    video.backend = backend;
     if (backend.shape) video.shape = backend.shape;
     if (backend.fps) video.fps = backend.fps;
     video.backendError = null;
@@ -2112,11 +2248,20 @@ export async function assignVideoBackendFromPath(
 }
 
 /**
+ * How long a link gets to answer with a frame. An `.mp4` link that answers with a
+ * web page (a sign-in, say) would otherwise never finish opening: the MP4 parser
+ * waits for video data that isn't coming, and whatever awaits the open waits too.
+ */
+const LINK_OPEN_TIMEOUT_MS = 60_000;
+
+/**
  * URL counterpart of {@link assignVideoBackendFromPath}: build the backend from
  * an http(s) URL via io's {@link createVideoBackend}, which lazily HTTP-Range-
  * streams the remote file (MP4 via Mp4Box, others via MediaBunny.fromUrl) — so
- * adding a remote video never downloads it whole. The URL is the canonical
- * filename, so a public/presigned URL re-streams on project reload.
+ * adding a remote video never downloads it whole. A public URL is the canonical
+ * filename, so it re-streams on project reload ({@link openStoredLink}); a URL with
+ * a credential is known by {@link savedLinkName}, and a person pastes it back
+ * ({@link resolveVideoFromUrl}).
  */
 export async function assignVideoBackendFromUrl(
   video: Video,
@@ -2130,12 +2275,28 @@ export async function assignVideoBackendFromUrl(
   const ok = await probeAndAssignBackend(
     video,
     () => createVideoBackend(url, { grayscale }),
-    getBasename(url),
-    { ...opts, grayscale }
+    // Goes in a toast and the console, so no query: it can hold the credential.
+    getBasename(url.split(/[?#]/)[0]),
+    { timeoutMs: LINK_OPEN_TIMEOUT_MS, ...opts, grayscale }
   );
   // Browser: upgrade to off-main worker decode (the worker does ranged fetches
   // against this URL). No-ops on desktop / non-mp4. Fire-and-forget.
   if (ok) void scheduleWorkerDecodeUpgradeBrowser(video, url, getBasename(url));
+  return ok;
+}
+
+/**
+ * Bring back a video from a link someone pasted. It streams until the project
+ * closes, and the whole link goes no further than the backend: the video's name is
+ * {@link savedLinkName}. A link that fails leaves the name as it was (already
+ * toasted). Returns true if the video opened.
+ */
+export async function resolveVideoFromUrl(
+  video: Video,
+  url: string
+): Promise<boolean> {
+  const ok = await assignVideoBackendFromUrl(video, url);
+  if (ok) video.filename = savedLinkName(url);
   return ok;
 }
 
@@ -2374,7 +2535,7 @@ export async function addVideoFileToLabels(
  * {@link isSupportedVideoUrl}; returns null on decode failure too (already
  * toasted). The URL is stored as the Video's canonical filename, so the
  * reference is portable — the project re-streams it on reload with no path
- * repointing (for authenticated providers, re-auth-on-open is a later phase).
+ * repointing, unless it holds a credential ({@link savedLinkName}).
  */
 export async function buildStandaloneVideoFromUrl(
   url: string,
@@ -2387,7 +2548,7 @@ export async function buildStandaloneVideoFromUrl(
     });
     return null;
   }
-  const video = new Video({ filename: url, openBackend: false });
+  const video = new Video({ filename: savedLinkName(url), openBackend: false });
   await assignVideoBackendFromUrl(video, url, { grayscale });
   // probeAndAssignBackend sets shape only on a successful frame-0 probe.
   if (!video.shape) return null;

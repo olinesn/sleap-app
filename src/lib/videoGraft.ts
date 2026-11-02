@@ -11,6 +11,8 @@
  * video gets no backend (blank frames + a warning) rather than the wrong one.
  */
 
+import { videoBasename } from "./videoFilter";
+
 /** The minimal video fields used to identify a video for grafting. `filename`
  *  is a string for regular/embedded videos and a string[] for image sequences. */
 export interface VideoIdentity {
@@ -103,10 +105,9 @@ function realSourceBasename(raw?: string | string[] | null): string | null {
  * never breaks a legitimate graft (see {@link buildBackendGraftPlan}).
  */
 export function videoSignature(v: VideoIdentity): string {
-  const raw = Array.isArray(v.filename)
-    ? (v.filename[0] ?? "")
-    : (v.filename ?? "");
-  const name = raw.split(/[\\/]/).pop() ?? "";
+  // Not a link's query: this goes in the drafts manifest, on disk, and a saved
+  // link has its credential masked, so a draft wouldn't match its own project.
+  const name = videoBasename(v.filename ?? "");
   const shape = Array.isArray(v.shape) ? v.shape.join("x") : "";
   const isEmbedded = v.embedded === true || /\.slp$/i.test(name);
   if (!isEmbedded) return `${name}|${shape}`; // external: shape(+name), unchanged

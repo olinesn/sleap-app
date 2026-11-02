@@ -87,6 +87,13 @@ on another machine, and those paths stop resolving.
 - The app also looks for the file near the project and next to the old path
   before asking you.
 
+A video added with **File ▸ Add Video from URL…** stays a link. A public link
+streams again when you reopen the project. A link holding a credential, such as a
+token, is saved without it (`?token=***`), so sharing the project doesn't hand the
+credential over. Keep a copy of such a link: when you reopen the project, the player
+and the video's row in the **Videos** panel offer **Paste Link**. Paste the whole
+link, and the video streams until you close the project.
+
 For remote jobs there is a dedicated **path resolution** dialog that maps every
 file the job needs onto a path the worker can see — including auto-detecting the
 rest of a folder and cascade-filling once it works out the prefix difference. See

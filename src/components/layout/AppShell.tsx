@@ -44,6 +44,7 @@ import { DeletePredictionsDialog } from "../dialogs/DeletePredictionsDialog";
 import { MergeProjectDialog } from "../dialogs/MergeProjectDialog";
 import { ExportModelDialog } from "../dialogs/ExportModelDialog";
 import { AddVideoUrlDialog } from "../dialogs/AddVideoUrlDialog";
+import { PasteVideoLinkDialog } from "../dialogs/PasteVideoLinkDialog";
 import { ExportClipDialog } from "../dialogs/ExportClipDialog";
 import { ModelMetricsDialog } from "../dialogs/ModelMetricsDialog";
 import { SizeDistributionDialog } from "../dialogs/SizeDistributionDialog";
@@ -334,6 +335,7 @@ export function AppShell() {
       <SelectToFrameDialog />
       <MergeProjectDialog />
       <AddVideoUrlDialog />
+      <PasteVideoLinkDialog />
       <ExportModelDialog />
       <DeletePredictionsDialog
         open={deletePredictionsDialogOpen}

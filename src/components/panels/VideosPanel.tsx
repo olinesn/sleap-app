@@ -36,6 +36,7 @@ import type { Video } from "../../types";
 import { videoBasename, videoFilenameMatches } from "@/lib/videoFilter";
 import {
   isVideoMissing,
+  isMaskedVideoUrl,
   isImageSequenceVideo,
   resolveImageSequenceVideo,
   resolveVideoFile,
@@ -74,6 +75,7 @@ function VideoRow({
   onSelect,
   onLocate,
   onLocateFolder,
+  onPasteLink,
 }: {
   video: Video;
   index: number;
@@ -84,6 +86,7 @@ function VideoRow({
   onSelect: () => void;
   onLocate: () => void;
   onLocateFolder: () => void;
+  onPasteLink: () => void;
 }) {
   const shape = video.shape;
   // Embedded image count for a pkg.slp video (matches PyQt), else source frames.
@@ -120,7 +123,19 @@ function VideoRow({
             {truncateLeft(videoBasename(video.filename), 30)}
           </span>
           {isMissing &&
-            (isImageSequence ? (
+            (isMaskedVideoUrl(video.filename) ? (
+              <Button
+                variant="subtle"
+                size="xs"
+                className="h-4 px-1 text-[10px]"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onPasteLink();
+                }}
+              >
+                Paste link
+              </Button>
+            ) : isImageSequence ? (
               canLocateFolder ? (
                 <Button
                   variant="subtle"
@@ -319,6 +334,8 @@ export function VideosPanel() {
   const bumpOverlayVersion = useAppStore((s) => s.bumpOverlayVersion);
   const markVideoUpdated = useAppStore((s) => s.markVideoUpdated);
   const markChanged = useAppStore((s) => s.markChanged);
+  // Video objects change in place. A link pasted in its dialog is told by this.
+  useAppStore((s) => s.videoRevision);
 
   // Filename search: case-insensitive substring match on each video's basename.
   // Preserves each video's original index (for the # column + stable keys) so
@@ -642,6 +659,9 @@ export function VideosPanel() {
                     setResolving(false);
                     setLocateFolder(video);
                   }}
+                  onPasteLink={() =>
+                    useAppStore.getState().setPasteLinkVideo(video)
+                  }
                 />
               ))}
             </TableBody>

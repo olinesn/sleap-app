@@ -2,7 +2,8 @@
  * "Add video from URL" dialog (Phase 0 of cloud-media support). Streams a video
  * from a public or presigned http(s) URL via io's createVideoBackend (lazy HTTP
  * Range) and appends it to the current project. The URL is stored as the video's
- * canonical filename, so the reference is portable and re-streams on reload.
+ * canonical filename, so the reference is portable and re-streams on reload. A
+ * credential in it isn't kept, and then PasteVideoLinkDialog asks for the link back.
  *
  * Opened from the File menu (store flag `addVideoUrlDialogOpen`); mounted once in
  * AppShell. Standalone for now — intended to also feed the Videos-panel dropzone
@@ -20,7 +21,11 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { addVideoUrlToLabels, isSupportedVideoUrl } from "@/lib/resolveVideos";
+import {
+  addVideoUrlToLabels,
+  isSupportedVideoUrl,
+  urlHoldsCredential,
+} from "@/lib/resolveVideos";
 import { toast } from "@/lib/notify";
 
 export function AddVideoUrlDialog() {
@@ -66,7 +71,8 @@ export function AddVideoUrlDialog() {
         if (!o && !adding) close();
       }}
     >
-      <DialogContent className="sm:max-w-lg">
+      {/* Keys stop here: the app's shortcuts would take Cmd+V and the arrows from the box. */}
+      <DialogContent className="sm:max-w-lg" onKeyDown={(e) => e.stopPropagation()}>
         <DialogHeader>
           <DialogTitle>Add video from URL</DialogTitle>
         </DialogHeader>
@@ -79,8 +85,10 @@ export function AddVideoUrlDialog() {
         >
           <div className="flex flex-col gap-1.5">
             <label className="text-muted-foreground text-sm">
-              Stream a video from a public or presigned http(s) URL. The link is
-              stored in the project and re-streamed on reload.
+              Stream a video from a public or presigned http(s) URL. A public link
+              is stored in the project and re-streamed on reload. A link holding a
+              credential, such as a token, is stored without it: when you reopen the
+              project, you&rsquo;ll be asked to paste the link again.
             </label>
             <Input
               autoFocus
@@ -89,6 +97,12 @@ export function AddVideoUrlDialog() {
               onChange={(e) => setUrl(e.target.value)}
               spellCheck={false}
             />
+            {urlHoldsCredential(trimmed) && (
+              <p className="text-xs leading-snug text-yellow-500">
+                This link holds a credential. Keep a copy of it: you&rsquo;ll need
+                to paste it again after reopening the project.
+              </p>
+            )}
             <p className="text-muted-foreground text-xs leading-snug">
               Must be a direct link to a video file (e.g. a presigned S3/GCS URL)
               on a host that allows cross-origin range requests. Watch/share
