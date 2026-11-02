@@ -14,6 +14,7 @@ import type { Command } from "./types";
 import { toast } from "@/lib/notify";
 import { humanizeCommandName } from "@/lib/humanizeCommand";
 import { dirtyFrameTracker } from "@/lib/autosaveDirty";
+import { copyDetectionLabels, markCopyOf } from "@/lib/detectionLabels";
 
 /** Record of an executed command for change tracking. */
 export interface ChangeRecord {
@@ -79,29 +80,44 @@ function clonePoints(points: Instance["points"]): Instance["points"] {
   }));
 }
 
-/** Deep-clone an array of instances (preserving skeleton/track references). */
+/**
+ * Deep-clone an array of instances (preserving skeleton/track references), with what
+ * they carry besides their poses: a snapshot restored by undo must not lose a tracker's
+ * score, an identity or a category. A `fromPredicted` link to an instance also cloned
+ * here moves to its clone; one to anything else stays as it is.
+ */
 function cloneInstances(instances: Instance[]): Instance[] {
-  return instances.map((inst) => {
-    if (inst instanceof PredictedInstance) {
-      return new PredictedInstance({
-        skeleton: inst.skeleton,
-        points: inst.points.map((p) => ({
-          xy: [p.xy[0], p.xy[1]] as [number, number],
-          visible: p.visible,
-          complete: p.complete,
-          name: p.name,
-          score: p.score ?? 0,
-        })),
-        track: inst.track,
-        score: inst.score,
-      });
-    }
-    return new Instance({
-      skeleton: inst.skeleton,
-      points: clonePoints(inst.points),
-      track: inst.track,
-    });
+  const clones = new Map<Instance, Instance>();
+  const out = instances.map((inst) => {
+    const clone =
+      inst instanceof PredictedInstance
+        ? new PredictedInstance({
+            skeleton: inst.skeleton,
+            points: inst.points.map((p) => ({
+              xy: [p.xy[0], p.xy[1]] as [number, number],
+              visible: p.visible,
+              complete: p.complete,
+              name: p.name,
+              score: p.score ?? 0,
+            })),
+            track: inst.track,
+            score: inst.score,
+          })
+        : new Instance({
+            skeleton: inst.skeleton,
+            points: clonePoints(inst.points),
+            track: inst.track,
+          });
+    copyDetectionLabels(inst, clone);
+    markCopyOf(inst, clone);
+    clones.set(inst, clone);
+    return clone;
   });
+  out.forEach((clone, i) => {
+    const link = instances[i].fromPredicted;
+    if (link) clone.fromPredicted = (clones.get(link) as PredictedInstance) ?? link;
+  });
+  return out;
 }
 
 /** Callbacks that can be registered to react to update topics. */
