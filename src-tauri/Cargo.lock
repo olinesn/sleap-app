@@ -5775,6 +5775,7 @@ dependencies = [
  "iroh",
  "libc",
  "log",
+ "objc2-foundation",
  "reqwest",
  "rustls",
  "semver",
