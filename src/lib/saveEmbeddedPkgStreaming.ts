@@ -61,6 +61,7 @@ import {
   removeFile,
 } from "./nativeWrite";
 import { fileSize, readRange } from "./nativeRange";
+import { closeStreamingWriter } from "./closeStreamingWriter";
 
 // Same derivation as loadProject.ts / writeBridgeSpike.ts: h5wasm must be served
 // same-origin so the streaming Worker can load it under cross-origin isolation
@@ -162,7 +163,8 @@ async function removeFileBestEffort(path: string): Promise<void> {
  * `StreamingH5Writer`: stored images are stream-copied from `sourcePath` (raw
  * entries, dual bridge), and new embeds have their frames read from `labels`
  * and PNG-encoded + appended in the worker (encode entries). Always closes
- * both the worker and the native write handle, even on failure.
+ * both the worker and the native write handle, even on failure. Throws if the
+ * worker's close fails: the last of the file is written there.
  */
 async function appendEmbeddedVideosToTemp(
   plan: SerializableEmbedPlan,
@@ -173,6 +175,7 @@ async function appendEmbeddedVideosToTemp(
 ): Promise<void> {
   await writeOpenAppend(tempPath);
   const writer = new StreamingH5Writer();
+  let closeError: Error | null = null;
   try {
     const destSize = await fileSize(tempPath);
     const destSink: RangeSink = {
@@ -222,11 +225,14 @@ async function appendEmbeddedVideosToTemp(
     }
   } finally {
     // Belt-and-suspenders close, mirroring writeBridgeSpike.ts's pattern: close
-    // the worker first, then the native handle. Both are best-effort so a
-    // "already closed" error on either can't mask a real failure above.
-    await writer.close().catch(() => {});
+    // the worker first, then the native handle. Neither can mask a real failure
+    // above, and the native close is best-effort.
+    closeError = await closeStreamingWriter(writer);
     await writeClose().catch(() => {});
   }
+  // Only reached if the steps above worked; runSave then treats this like any
+  // other failure (removes the stage, publishes nothing).
+  if (closeError) throw closeError;
 }
 
 /**

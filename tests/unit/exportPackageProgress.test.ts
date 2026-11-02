@@ -180,6 +180,8 @@ describe("exportLabelsPackage progress (in memory: browser, or already-embedded 
 
     expect(useAppStore.getState().isLoading).toBe(false);
     expect(toastError).toHaveBeenCalledTimes(1);
+    const [, opts] = toastError.mock.calls[0] as unknown as [string, { description: string }];
+    expect(opts.description).toContain('from "mice.mp4" to embed');
   });
 
   it("Cancel makes io's onProgress return false; nothing is saved and no error shows", async () => {

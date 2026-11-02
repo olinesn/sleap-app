@@ -60,6 +60,7 @@ import {
   writeClose,
 } from "./nativeWrite";
 import { fileSize, readRange } from "./nativeRange";
+import { closeStreamingWriter } from "./closeStreamingWriter";
 
 // Same derivation as loadProject.ts / saveEmbeddedPkgStreaming.ts: h5wasm must be
 // served same-origin so the streaming Worker can load it under cross-origin
@@ -504,6 +505,7 @@ export async function saveLabelsInPlace(
       close: () => writeClose(),
     };
     const writer = new StreamingH5Writer();
+    let closeError: Error | null = null;
     try {
       await writer.openWrite(destSink, destPath, destSize, H5WASM_URL);
       const res = await writer.updateLabelsInPlace(update);
@@ -515,8 +517,16 @@ export async function saveLabelsInPlace(
     } finally {
       // Belt-and-suspenders close, mirroring the streaming writer: close the
       // worker first (flushes h5wasm through the bridge), then the native handle.
-      await writer.close().catch(() => {});
+      closeError = await closeStreamingWriter(writer);
       await writeClose().catch(() => {});
+    }
+    // Only reached if the write above worked. The worker's close writes the last
+    // of the file, and this is the user's real file, so say what that may mean.
+    if (closeError) {
+      throw new Error(
+        `saveLabelsInPlace: closing the file failed (${closeError.message}) — save may be inconsistent, reopen to check`,
+        { cause: closeError }
+      );
     }
   });
   console.log(

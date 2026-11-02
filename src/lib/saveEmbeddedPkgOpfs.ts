@@ -36,6 +36,7 @@ import {
   appendEncodedVideos,
 } from "@talmolab/sleap-io.js";
 import type { EmbedOption, Labels, SlpWriteOptions } from "@talmolab/sleap-io.js";
+import { closeStreamingWriter } from "./closeStreamingWriter";
 
 // Same derivation as loadProject.ts / saveEmbeddedPkgStreaming.ts: h5wasm served
 // same-origin (works with or without cross-origin isolation).
@@ -43,6 +44,10 @@ const H5WASM_URL =
   typeof location !== "undefined"
     ? `${location.origin}/h5wasm/h5wasm.js`
     : undefined;
+
+/** How long {@link removeOpfsFile} waits for the browser to let go of a file: 5 s. */
+const REMOVE_LOCKED_RETRIES = 100;
+const REMOVE_LOCKED_WAIT_MS = 50;
 
 /**
  * True if the runtime can back the OPFS streaming save AND deliver it to disk:
@@ -89,7 +94,9 @@ export async function pickSlpSaveDestination(
 /**
  * Stream-save `labels` (an already-embedded pkg.slp) into the pre-acquired
  * `destHandle`, reading embedded images from `sourceFile` (the opened file) via
- * the OPFS writer. Returns the saved file name. Throws on any failure.
+ * the OPFS writer. Returns the saved file name. Throws on any failure; as in
+ * {@link exportNewPkgOpfs}, a failed build removes the staging file, and the
+ * destination is left as the picker made it (an empty new file is removed).
  */
 export async function saveEmbeddedPkgOpfs(
   labels: Labels,
@@ -116,26 +123,36 @@ export async function saveEmbeddedPkgOpfs(
   // 2. Build the file into OPFS: seed the structure, then copy image datasets
   //    from the source (WORKERFS) into OPFS (sync-handle device), in the Worker.
   const writer = new StreamingH5Writer();
+  let closeError: Error | null = null;
   try {
-    await writer.openAppendOpfs(
-      opfsPath,
-      sourceFile,
-      structureBytes,
-      sourceFile.name,
-      H5WASM_URL
-    );
-    if (plan.entries.length > 0) {
-      const res = await writer.appendEmbeddedVideos(plan.entries, onProgress);
-      if (res.success !== true) {
-        throw new Error(
-          `saveEmbeddedPkgOpfs: appendEmbeddedVideos failed: ${
-            res.error ?? JSON.stringify(res)
-          }`
-        );
+    try {
+      await writer.openAppendOpfs(
+        opfsPath,
+        sourceFile,
+        structureBytes,
+        sourceFile.name,
+        H5WASM_URL
+      );
+      if (plan.entries.length > 0) {
+        const res = await writer.appendEmbeddedVideos(plan.entries, onProgress);
+        if (res.success !== true) {
+          throw new Error(
+            `saveEmbeddedPkgOpfs: appendEmbeddedVideos failed: ${
+              res.error ?? JSON.stringify(res)
+            }`
+          );
+        }
       }
+    } finally {
+      closeError = await closeStreamingWriter(writer);
     }
-  } finally {
-    await writer.close().catch(() => {});
+    // Only reached if the steps above worked. The last of the file is written as
+    // the writer closes, so this file must not reach the destination.
+    if (closeError) throw closeError;
+  } catch (err) {
+    await removeOpfsFile(opfsPath);
+    await removeIfEmpty(destHandle);
+    throw err;
   }
 
   // 3. Stream the OPFS file into the user's chosen destination.
@@ -177,14 +194,18 @@ export async function exportNewPkgOpfs(
     // 2. Append the frames: open it non-truncating and stream them in.
     if (plan.encodeEntries.length > 0) {
       const writer = new StreamingH5Writer();
+      let closeError: Error | null = null;
       try {
         await writer.openWriteOpfs(opfsPath, structureBytes.byteLength, H5WASM_URL);
         await appendEncodedVideos(writer, labels, plan.encodeEntries, {
           onProgress: options.onProgress,
         });
       } finally {
-        await writer.close().catch(() => {});
+        closeError = await closeStreamingWriter(writer);
       }
+      // Only reached if the steps above worked. The last of the file is written
+      // as the writer closes, so this file must not reach the destination.
+      if (closeError) throw closeError;
     }
   } catch (err) {
     await removeOpfsFile(opfsPath);
@@ -235,11 +256,22 @@ async function removeIfEmpty(handle: FileSystemFileHandle): Promise<void> {
   }
 }
 
+/**
+ * Remove the staging file. After a failed write the writer ends its worker without
+ * closing the file, and the browser refuses to remove it until that worker is really
+ * gone, which a first try can beat (3 of 20 failed saves in Chromium 153), so a locked
+ * file gets a few seconds. Best-effort: a save's own error matters more than this.
+ */
 async function removeOpfsFile(opfsPath: string): Promise<void> {
-  try {
-    const root = await navigator.storage.getDirectory();
-    await root.removeEntry(opfsPath);
-  } catch {
-    // best-effort cleanup
+  for (let retries = 0; ; retries++) {
+    try {
+      const root = await navigator.storage.getDirectory();
+      await root.removeEntry(opfsPath);
+      return;
+    } catch (err) {
+      const locked = err instanceof DOMException && err.name === "NoModificationAllowedError";
+      if (!locked || retries >= REMOVE_LOCKED_RETRIES) return;
+      await new Promise((resolve) => setTimeout(resolve, REMOVE_LOCKED_WAIT_MS));
+    }
   }
 }
