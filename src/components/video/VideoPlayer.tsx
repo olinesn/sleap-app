@@ -10,7 +10,7 @@
  */
 
 import { useRef, useEffect, useCallback, useState, useMemo } from "react";
-import { PredictedInstance } from "@talmolab/sleap-io.js";
+import { PredictedInstance, type EventParticipant } from "@talmolab/sleap-io.js";
 import { useAppStore } from "../../stores/appStore";
 import { debugFlags } from "../panels/DebugPanel";
 import { Seekbar } from "./Seekbar";
@@ -19,6 +19,9 @@ import { SkeletonBuildBar } from "./SkeletonBuildBar";
 import { AnchorPickBar } from "./AnchorPickBar";
 import { TransposePickBar } from "./TransposePickBar";
 import { BehaviorReadout } from "./BehaviorReadout";
+import { useBehaviorStore } from "@/stores/behaviorStore";
+import { behaviorAnimals, frameAnimals } from "@/lib/behaviorEvents";
+import { focalAnimal } from "@/lib/behaviorCoding";
 import {
   renderInstances,
   hitTestNode,
@@ -105,6 +108,22 @@ export function nextBuilderNodeName(nodes: { name: string }[]): string {
   return `node_${k}`;
 }
 
+/** The name an instance wears while labelling behaviors. */
+function animalTagOf(
+  animal: EventParticipant | undefined,
+  animals: EventParticipant[],
+  keyed: EventParticipant | null,
+  palette: string,
+): RenderedInstance["animalTag"] {
+  if (!animal) return undefined;
+  const i = animals.indexOf(animal);
+  return {
+    text: i >= 0 && i < 9 ? `${i + 1} ${animal.name}` : animal.name,
+    color: getPaletteColor(palette, Math.max(0, i)),
+    focal: animal === keyed,
+  };
+}
+
 export function VideoPlayer() {
   const frameCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -138,6 +157,8 @@ export function VideoPlayer() {
   const markerSize = useAppStore((s) => s.markerSize);
   const nodeLabelSize = useAppStore((s) => s.nodeLabelSize);
   const palette = useAppStore((s) => s.palette);
+  const behaviorMode = useBehaviorStore((s) => s.mode);
+  const behaviorFocal = useBehaviorStore((s) => s.focal);
   const trackColorOverrides = useAppStore((s) =>
     getActiveTrackOverrides(s.trackColorOverrides, s.projectPath, s.filename),
   );
@@ -1187,24 +1208,31 @@ export function VideoPlayer() {
   const renderedInstances = useMemo<RenderedInstance[]>(() => {
     if (!labeledFrame || !showInstances) return [];
     const tracks = labels?.tracks ?? [];
+    // While labelling behaviors, each animal is named: the digit that picks it, and its name.
+    const animalOf =
+      behaviorMode && labels && video ? frameAnimals(labels, video, labeledFrame) : null;
+    const animals = animalOf && labels ? behaviorAnimals(labels) : [];
+    const keyedAnimal = animalOf && labels ? focalAnimal(labels) : null;
     const frameInstanceTracks = labeledFrame.instances.map((i) => i.track);
     const resolvedColorTarget = resolveColorTarget(distinctlyColor, projectHasTracks);
     const vis = { showInstances, hiddenInstances, viewOnlyInstance, showNonVisibleOverride };
     return labeledFrame.instances.map((inst, idx) => {
       const isPredicted = inst instanceof PredictedInstance;
       const skeleton = inst.skeleton;
-      const color = getInstanceColor(
+      const animalTag = animalTagOf(animalOf?.get(inst), animals, keyedAnimal, palette);
+      // While labelling behaviors a skeleton wears its animal's color, whatever its track.
+      const color = animalTag?.color ?? getInstanceColor(
         palette, distinctlyColor, idx, inst.track, tracks, isPredicted, colorPredicted, projectHasTracks, frameInstanceTracks, trackColorOverrides
       );
 
       // Per-node colors when (resolved) distinctlyColor === "node"
-      const nodeColors = resolvedColorTarget === "node" && !(isPredicted && !colorPredicted)
+      const nodeColors = !animalTag && resolvedColorTarget === "node" && !(isPredicted && !colorPredicted)
         ? skeleton.nodes.map((_, nIdx) => getPaletteColor(palette, nIdx))
         : undefined;
 
       // Per-edge colors when (resolved) distinctlyColor === "edge"
       const edgeIndices = skeleton.edgeIndices;
-      const edgeColors = resolvedColorTarget === "edge" && !(isPredicted && !colorPredicted)
+      const edgeColors = !animalTag && resolvedColorTarget === "edge" && !(isPredicted && !colorPredicted)
         ? edgeIndices.map((_, eIdx) => getPaletteColor(palette, eIdx))
         : undefined;
 
@@ -1237,6 +1265,7 @@ export function VideoPlayer() {
         isPredicted,
         isSelected: inst === selectedInstance,
         trackName: inst.track?.name ?? null,
+        animalTag,
         score: isPredicted ? inst.score : undefined,
         visible: instanceVisible(vis, inst),
         showNonVisible: instanceShowsNonVisible(vis, inst, showNonVisibleNodes),
@@ -1258,6 +1287,8 @@ export function VideoPlayer() {
     showNonVisibleNodes,
     video,
     overlayVersion,
+    behaviorMode,
+    behaviorFocal,
   ]);
 
   useEffect(() => {
@@ -1406,10 +1437,11 @@ export function VideoPlayer() {
       nodeLabelSize,
       edgeStyle,
       showInstances,
-      showLabels,
+      // While labelling behaviors: animals in their colors, without node names over them.
+      showLabels: showLabels && !behaviorMode,
       showEdges,
       showNonVisibleNodes,
-      colorPredicted,
+      colorPredicted: colorPredicted || behaviorMode,
       showTrackScore,
       zoom: baseScale * zoom,
     };
@@ -1502,6 +1534,7 @@ export function VideoPlayer() {
     ctx.restore();
   }, [
     renderedInstances,
+    behaviorMode,
     labeledFrame,
     selectedInstance,
     showInstances,

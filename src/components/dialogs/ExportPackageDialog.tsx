@@ -76,7 +76,8 @@ export function ExportPackageDialog({
     await commandContext.execute(COMMAND_BY_LEVEL[level]);
   }, [level, onOpenChange]);
 
-  if (!labels) return null;
+  // Closed, it renders nothing: the frame counts below walk the whole project.
+  if (!labels || !open) return null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

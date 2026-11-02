@@ -76,7 +76,7 @@ export function stopAllRunning(): void {
  */
 export function flushRunningBehaviors(): void {
   const { running } = useBehaviorStore.getState();
-  const { labels, frameIdx, markChanged } = useAppStore.getState();
+  const { labels, frameIdx, markEventsChanged } = useAppStore.getState();
   if (!labels || !running.length) return;
   for (const r of running) {
     labelRange(labels, {
@@ -88,7 +88,7 @@ export function flushRunningBehaviors(): void {
       end: Math.max(frameIdx, r.start),
     });
   }
-  markChanged();
+  markEventsChanged();
 }
 
 /** Do what a behavior's key does, once its animals are known. */

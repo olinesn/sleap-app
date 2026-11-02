@@ -7,9 +7,15 @@ import { describe, it, expect } from "../bun-test";
 import {
   Camera,
   CameraGroup,
+  type Event,
   EventType,
+  FrameGroup,
   Identity,
+  Instance,
+  InstanceGroup,
+  LabeledFrame,
   Labels,
+  Skeleton,
   PredictedEvent,
   RecordingSession,
   Track,
@@ -35,12 +41,14 @@ import {
   ethogram,
   eventsAtFrame,
   eventsForVideo,
+  frameAnimals,
   isNotType,
   labelRange,
   notTypeOf,
   normalizeBehaviorKey,
   orderPair,
   predictionStatus,
+  predictionStatuses,
   rejectPrediction,
   removeBehavior,
   sessionVideosOf,
@@ -482,5 +490,94 @@ describe("the file", () => {
     const back = await loadSlp(new Uint8Array(bytes).buffer as ArrayBuffer, { openVideos: false });
     expect(back.eventTypes).toHaveLength(0);
     expect(back.events).toHaveLength(0);
+  });
+});
+
+describe("predictionStatuses", () => {
+  it("says what predictionStatus says, for every prediction, on overlapping and out-of-order labels", () => {
+    const { labels, video, a, b } = project();
+    const rear = addBehavior(labels, { name: "rear" });
+    const predictions: Event[] = [];
+    // A fixed scatter of predictions and of labels, present and "not", some crossing.
+    let seed = 7;
+    const next = (n: number) => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed % n;
+    };
+    for (let i = 0; i < 300; i += 1) {
+      const start = next(400);
+      predictions.push(
+        new PredictedEvent({
+          type: rear,
+          video,
+          startFrame: start,
+          endFrame: start + next(12),
+          subject: i % 2 ? a : b,
+          score: 0.5,
+        }),
+      );
+    }
+    labels.events.push(...predictions);
+    for (let i = 0; i < 60; i += 1) {
+      const start = next(400);
+      labelRange(labels, {
+        type: rear,
+        video,
+        subject: i % 3 ? a : b,
+        target: null,
+        start,
+        end: start + next(9),
+        present: i % 4 !== 0,
+      });
+    }
+    const fast = predictionStatuses(labels, predictions);
+    for (const p of predictions) {
+      expect(fast.get(p)).toBe(predictionStatus(labels, p));
+    }
+    expect(new Set(fast.values()).size).toBeGreaterThan(1);
+  });
+});
+
+describe("frameAnimals", () => {
+  const skeleton = new Skeleton({ nodes: ["a"] });
+  const inst = (track?: Track) => {
+    const i = Instance.fromArray([[1, 2]], skeleton);
+    if (track) i.track = track;
+    return i;
+  };
+
+  it("names a plain project's instances by their tracks", () => {
+    const { labels, video, a } = project();
+    const tracked = inst(a);
+    const untracked = inst();
+    const frame = new LabeledFrame({ video, frameIdx: 3, instances: [tracked, untracked] });
+    const animals = frameAnimals(labels, video, frame);
+    expect(animals.get(tracked)).toBe(a);
+    expect(animals.has(untracked)).toBe(false);
+  });
+
+  it("names a session's instances by their group's identity, on each camera", () => {
+    const { labels, v0, v1, mouse } = sessionProject();
+    const session = labels.sessions[0];
+    const [c0, c1] = session.cameraGroup.cameras;
+    const on0 = inst(new Track("cam0 track"));
+    const on1 = inst(new Track("cam1 track"));
+    const stray = inst();
+    const group = new InstanceGroup({
+      identity: mouse,
+      instanceByCamera: new Map([
+        [c0, on0],
+        [c1, on1],
+      ]),
+    });
+    session.frameGroups.set(5, new FrameGroup({ frameIdx: 5, instanceGroups: [group] }));
+    const frame0 = new LabeledFrame({ video: v0, frameIdx: 5, instances: [on0, stray] });
+    const frame1 = new LabeledFrame({ video: v1, frameIdx: 5, instances: [on1] });
+    expect(frameAnimals(labels, v0, frame0).get(on0)).toBe(mouse);
+    expect(frameAnimals(labels, v0, frame0).has(stray)).toBe(false);
+    expect(frameAnimals(labels, v1, frame1).get(on1)).toBe(mouse);
+    // Another frame's groups say nothing about this one.
+    const other = new LabeledFrame({ video: v0, frameIdx: 6, instances: [on0] });
+    expect(frameAnimals(labels, v0, other).size).toBe(0);
   });
 });

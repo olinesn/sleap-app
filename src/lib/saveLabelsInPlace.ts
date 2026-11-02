@@ -282,7 +282,9 @@ function firstTwoNumbers(value: unknown, xField: string, yField: string): [numbe
     const obj = value as Record<string, unknown>;
     const xs = obj[xField];
     const ys = obj[yField];
-    if (Array.isArray(xs) && Array.isArray(ys)) {
+    const isColumn = (c: unknown): c is ArrayLike<unknown> =>
+      Array.isArray(c) || ArrayBuffer.isView(c);
+    if (isColumn(xs) && isColumn(ys)) {
       const a = asNum(xs[0]);
       const b = asNum(ys[0]);
       return a != null && b != null ? [a, b] : null;

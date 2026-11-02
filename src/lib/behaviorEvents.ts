@@ -38,6 +38,7 @@ import {
 import type {
   Event,
   EventParticipant,
+  LabeledFrame,
   Labels,
   Track,
   Video,
@@ -309,6 +310,32 @@ export function behaviorAnimals(labels: Labels): EventParticipant[] {
 /** A participant's color key: is it an identity (vs. a track)? */
 export function isIdentity(p: EventParticipant | null): p is Identity {
   return p instanceof Identity;
+}
+
+/**
+ * Which animal each instance of this frame is, as {@link behaviorAnimals} names them: its
+ * identity (on the instance, or through its recording session's group), else its track.
+ */
+export function frameAnimals(
+  labels: Labels,
+  video: Video,
+  frame: LabeledFrame,
+): Map<object, EventParticipant> {
+  const out = new Map<object, EventParticipant>();
+  if (labels.identities.length === 0) {
+    for (const inst of frame.instances) if (inst.track) out.set(inst, inst.track);
+    return out;
+  }
+  for (const inst of frame.instances) if (inst.identity) out.set(inst, inst.identity);
+  for (const session of labels.sessions) {
+    const camera = session.cameraByVideo.get(video);
+    if (!camera) continue;
+    for (const group of session.frameGroups.get(frame.frameIdx)?.instanceGroups ?? []) {
+      const inst = group.identity && group.instanceByCamera.get(camera);
+      if (inst) out.set(inst, group.identity as Identity);
+    }
+  }
+  return out;
 }
 
 /** Put a mutual behavior's pair in name order; any other pair stays as it is. */
@@ -583,6 +610,103 @@ export function predictionStatus(
   }
   if (yes && no) return "mixed";
   return yes ? "accepted" : no ? "rejected" : "open";
+}
+
+/** One kind of label of one pair of animals, sorted by start, to ask "any overlap?" fast. */
+interface LabelSpans {
+  starts: number[];
+  /** The latest end among the spans up to here. */
+  latestEnd: number[];
+}
+
+function anyOverlap(spans: LabelSpans | undefined, start: number, end: number): boolean {
+  if (!spans) return false;
+  // The last span starting at or before `end`: whichever ends latest up to it decides.
+  let lo = 0;
+  let hi = spans.starts.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (spans.starts[mid] <= end) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo > 0 && spans.latestEnd[lo - 1] >= start;
+}
+
+/**
+ * {@link predictionStatus} of many predictions at once. The panel asks for every
+ * prediction on every edit: thousands of predictions over thousands of labels is too many
+ * scans to keep a label edit quick.
+ */
+export function predictionStatuses(
+  labels: Labels,
+  predictions: Event[],
+): Map<Event, ReviewStatus> {
+  // A session's videos share labels, so a label's scope is its session, else its video.
+  const scopeOf = new Map<Video, object>();
+  for (const session of labels.sessions) {
+    for (const v of session.videos) scopeOf.set(v, session);
+  }
+  const ids = new Map<object, number>();
+  const idOf = (o: object | null): number => {
+    if (!o) return -1;
+    let id = ids.get(o);
+    if (id === undefined) {
+      id = ids.size;
+      ids.set(o, id);
+    }
+    return id;
+  };
+  const scopeId = (v: Video | null): number =>
+    v ? idOf(scopeOf.get(v) ?? v) : -1;
+  const keyOf = (
+    type: EventType,
+    video: Video | null,
+    subject: EventParticipant | null,
+    target: EventParticipant | null,
+  ) => `${idOf(type)}:${scopeId(video)}:${idOf(subject)}:${idOf(target)}`;
+
+  const grouped = new Map<string, Event[]>();
+  for (const e of labels.events) {
+    if (e.isPredicted) continue;
+    const key = keyOf(e.type, e.video, e.subject, e.target);
+    const list = grouped.get(key);
+    if (list) list.push(e);
+    else grouped.set(key, [e]);
+  }
+  const spans = new Map<string, LabelSpans>();
+  for (const [key, list] of grouped) {
+    list.sort((a, b) => a.startFrame - b.startFrame);
+    let latest = -Infinity;
+    spans.set(key, {
+      starts: list.map((e) => e.startFrame),
+      latestEnd: list.map((e) => (latest = Math.max(latest, e.endFrame))),
+    });
+  }
+
+  const notTypes = new Map<string, EventType>();
+  for (const t of labels.eventTypes) {
+    if (t.metadata.negates && !notTypes.has(t.metadata.negates)) {
+      notTypes.set(t.metadata.negates, t);
+    }
+  }
+  const out = new Map<Event, ReviewStatus>();
+  for (const p of predictions) {
+    const notType = notTypes.get(p.type.name);
+    const yes = anyOverlap(
+      spans.get(keyOf(p.type, p.video, p.subject, p.target)),
+      p.startFrame,
+      p.endFrame,
+    );
+    const no =
+      !!notType &&
+      anyOverlap(
+        spans.get(keyOf(notType, p.video, p.subject, p.target)),
+        p.startFrame,
+        p.endFrame,
+      );
+    out.set(p, yes && no ? "mixed" : yes ? "accepted" : no ? "rejected" : "open");
+  }
+  return out;
 }
 
 /** Accept: label the prediction's frames present. */
