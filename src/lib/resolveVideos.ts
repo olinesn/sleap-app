@@ -992,9 +992,36 @@ export async function resolveVideoFile(
   return false;
 }
 
+/** A video's stored path with separators evened out, so one path compares equal. */
+function storedPathKey(video: Video): string {
+  const raw = Array.isArray(video.filename)
+    ? video.filename[0] ?? ""
+    : video.filename;
+  return raw.replace(/\\/g, "/");
+}
+
+/**
+ * The videos a file name alone can't settle: those whose (lowercased) basename
+ * is also the name of a video stored at a different path, like the `0.mp4` in
+ * each camera folder of a campy recording. Videos stored at the same path don't
+ * count: they really are one file.
+ */
+function videosSharingAFileName(videos: Video[]): Set<Video> {
+  const nameOf = (v: Video) => getBasename(v.filename).toLowerCase();
+  const pathsByName = new Map<string, Set<string>>();
+  for (const v of videos) {
+    const paths = pathsByName.get(nameOf(v));
+    if (paths) paths.add(storedPathKey(v));
+    else pathsByName.set(nameOf(v), new Set([storedPathKey(v)]));
+  }
+  return new Set(videos.filter((v) => (pathsByName.get(nameOf(v))?.size ?? 0) > 1));
+}
+
 /**
  * Open a multi-file picker to batch-resolve multiple missing videos.
- * Matches picked files to videos by basename (case-insensitive).
+ * Matches picked files to videos by basename (case-insensitive). Videos that
+ * share a basename but not a stored path are never matched: this flow goes by
+ * name alone, and giving them one file would show one camera on every camera.
  * Returns the number of videos successfully resolved.
  */
 export async function resolveAllVideoFiles(
@@ -1004,6 +1031,35 @@ export async function resolveAllVideoFiles(
   if (unresolvedVideos.length === 0) return 0;
 
   const platform = await getPlatform();
+
+  const sameNamed = videosSharingAFileName(unresolvedVideos);
+  const warnUnmatched = (remaining: number) => {
+    // This picker is what Locate All Missing opens on desktop and in browsers
+    // with no folder pick, so point at what is on offer there. Desktop's own
+    // Locate carries the others along (propagatePrefixSwap).
+    const sameNameAdvice = platform.isTauri
+      ? "Videos with the same file name can't be matched from a list of files. " +
+        "Use Locate on one video's row: the others follow if they moved together."
+      : "Picked files don't show which folder they came from, so videos with " +
+        "the same file name can't be told apart. Use Locate All Missing in " +
+        "Chrome or Edge, which picks a whole folder, or Locate on each video's row.";
+    toast.warning(
+      `${remaining} video${remaining > 1 ? "s" : ""} could not be matched`,
+      {
+        description:
+          sameNamed.size > 0
+            ? sameNameAdvice
+            : "Annotations will be visible but some video frames will be blank.",
+      }
+    );
+  };
+
+  // Nothing the picker could return would be used, so don't ask.
+  if (sameNamed.size === unresolvedVideos.length) {
+    warnUnmatched(sameNamed.size);
+    return 0;
+  }
+
   console.log(`[video] Batch-resolving ${unresolvedVideos.length} video(s) via ${platform.isTauri ? "Tauri" : "browser"} dialog`);
   // One dialog for many missing videos: offer every relinkable source rather
   // than any single video's extension (see locateVideoFilters).
@@ -1067,6 +1123,7 @@ export async function resolveAllVideoFiles(
   let matchCount = 0;
 
   for (const video of unresolvedVideos) {
+    if (sameNamed.has(video)) continue;
     const expectedName = getBasename(video.filename).toLowerCase();
     const match = picked.find(
       (p) => p.name.toLowerCase() === expectedName
@@ -1105,14 +1162,7 @@ export async function resolveAllVideoFiles(
   }
 
   if (matchCount < unresolvedVideos.length) {
-    const remaining = unresolvedVideos.length - matchCount;
-    toast.warning(
-      `${remaining} video${remaining > 1 ? "s" : ""} could not be matched`,
-      {
-        description:
-          "Annotations will be visible but some video frames will be blank.",
-      }
-    );
+    warnUnmatched(unresolvedVideos.length - matchCount);
   }
 
   return matchCount;
@@ -1124,7 +1174,15 @@ interface FsEntryLike {
   kind: string;
 }
 interface FsDirLike extends FsEntryLike {
+  name?: string;
   entries(): AsyncIterableIterator<[string, FsEntryLike]>;
+}
+
+/** A file the folder scan found, with where it sits. */
+interface FoundFile {
+  handle: FsEntryLike;
+  /** Its path, from the picked folder's own name (if known) to its file name. */
+  segments: string[];
 }
 
 /** How deep to recurse / how many entries to visit when scanning a picked
@@ -1134,44 +1192,122 @@ const MAX_VIDEO_SCAN_ENTRIES = 20000;
 
 /**
  * Recursively scan a picked directory for files whose lowercased basename is in
- * `wantedKeys`, returning the first handle found per key. Bounded by depth and a
- * total-entry budget (network-mount safety) and early-exits once every wanted
- * key is found. Decoupled from the real File System Access API (structural
- * `FsDirLike`) so the walk is unit-testable with a mock tree.
+ * `wantedKeys`, returning every match per key with its path. Bounded by depth and
+ * a total-entry budget (network-mount safety), but with no early exit once each
+ * key has a match: a later file of the same name may be the right one. Decoupled
+ * from the real File System Access API (structural `FsDirLike`) so the walk is
+ * unit-testable with a mock tree.
  */
 export async function collectHandlesByBasename(
   dir: FsDirLike,
   wantedKeys: Set<string>,
   opts?: { maxDepth?: number; maxEntries?: number }
-): Promise<Map<string, FsEntryLike>> {
-  const found = new Map<string, FsEntryLike>();
+): Promise<Map<string, FoundFile[]>> {
+  const found = new Map<string, FoundFile[]>();
   const maxDepth = opts?.maxDepth ?? MAX_VIDEO_SCAN_DEPTH;
   const maxEntries = opts?.maxEntries ?? MAX_VIDEO_SCAN_ENTRIES;
   let visited = 0;
 
-  const walk = async (d: FsDirLike, depth: number): Promise<void> => {
+  const walk = async (
+    d: FsDirLike,
+    depth: number,
+    parents: string[]
+  ): Promise<void> => {
     if (depth > maxDepth) return;
     for await (const [name, handle] of d.entries()) {
-      if (found.size >= wantedKeys.size) return; // every key matched — stop
       if (++visited > maxEntries) return; // budget exhausted (mount safety)
       if (handle.kind === "file") {
         const key = name.toLowerCase();
-        if (wantedKeys.has(key) && !found.has(key)) found.set(key, handle);
+        if (wantedKeys.has(key)) {
+          const file = { handle, segments: [...parents, name] };
+          const files = found.get(key);
+          if (files) files.push(file);
+          else found.set(key, [file]);
+        }
       } else if (handle.kind === "directory") {
-        await walk(handle as FsDirLike, depth + 1);
+        await walk(handle as FsDirLike, depth + 1, [...parents, name]);
       }
     }
   };
 
-  await walk(dir, 0);
+  // The picked folder's own name counts: pick one camera's folder and the file
+  // directly inside it can still be told from the other cameras'.
+  await walk(dir, 0, dir.name ? [dir.name] : []);
   return found;
+}
+
+/** How many trailing path segments two paths share, ignoring case like the name. */
+function sharedTailLength(a: string[], b: string[]): number {
+  let n = 0;
+  while (
+    n < a.length &&
+    n < b.length &&
+    a[a.length - 1 - n].toLowerCase() === b[b.length - 1 - n].toLowerCase()
+  ) {
+    n++;
+  }
+  return n;
+}
+
+/**
+ * Decide which found file belongs to which stored path ({@link storedPathKey}):
+ * the same-named file sharing the longest run of trailing path segments with it,
+ * and each file goes to the path it fits best. So every camera of a recording
+ * that stores `<camera>/0.mp4` gets its own file.
+ *
+ * Nothing is guessed. A path whose best run is shared by two files, or a file
+ * two paths fit equally well, says nothing about which is which: those paths are
+ * left out and listed in `cannotTell`. A path whose file went to a better fit is
+ * left out too, with no fall back to a worse file, because a same-named file in
+ * an unrelated folder is no evidence.
+ */
+function matchStoredPathsToFiles(
+  storedPaths: string[],
+  found: Map<string, FoundFile[]>
+): { matched: Map<string, FoundFile>; cannotTell: Set<string> } {
+  const cannotTell = new Set<string>();
+
+  // Each path's best file, when it has exactly one.
+  const claims = new Map<FoundFile, { path: string; run: number }[]>();
+  for (const path of storedPaths) {
+    const segments = path.split("/").filter(Boolean);
+    let best: FoundFile[] = [];
+    let bestRun = 0;
+    for (const file of found.get(getBasename(path).toLowerCase()) ?? []) {
+      const run = sharedTailLength(segments, file.segments);
+      if (run > bestRun) {
+        best = [file];
+        bestRun = run;
+      } else if (run === bestRun) {
+        best.push(file);
+      }
+    }
+    if (best.length > 1) {
+      cannotTell.add(path);
+    } else if (best.length === 1) {
+      const claim = { path, run: bestRun };
+      const claimants = claims.get(best[0]);
+      if (claimants) claimants.push(claim);
+      else claims.set(best[0], [claim]);
+    }
+  }
+
+  const matched = new Map<string, FoundFile>();
+  for (const [file, claimants] of claims) {
+    const topRun = Math.max(...claimants.map((c) => c.run));
+    const top = claimants.filter((c) => c.run === topRun);
+    if (top.length === 1) matched.set(top[0].path, file);
+    else for (const c of top) cannotTell.add(c.path);
+  }
+  return { matched, cannotTell };
 }
 
 /**
  * Locate all missing (regular, single-file) videos from ONE user-picked folder:
- * recursively match each missing video by basename under the folder and open its
- * backend. The browser-convenience analogue of the desktop's auto-resolve — pick
- * the folder once instead of each file. Chromium only (needs
+ * recursively look under the folder for each missing video's file name, give it
+ * the file that fits its stored path ({@link matchStoredPathsToFiles}) and open
+ * its backend. The browser-convenience analogue of the desktop's auto-resolve —
+ * pick the folder once instead of each file. Chromium only (needs
  * `showDirectoryPicker`); elsewhere / on Tauri it falls back to the multi-file
  * picker ({@link resolveAllVideoFiles}). Session-only: opens the decoder from the
  * picked File but does NOT rewrite `video.filename` (a browser File exposes no
@@ -1212,28 +1348,32 @@ export async function resolveAllVideosFromFolder(
     throw err;
   }
 
-  // Each missing video's lowercased basename → the video(s) wanting that name.
+  // Each missing video's stored path → the video(s) stored at that path, which
+  // are one file and so share whatever that path matches.
   const wanted = new Map<string, Video[]>();
   for (const v of missing) {
-    const key = getBasename(v.filename).toLowerCase();
+    const key = storedPathKey(v);
     const list = wanted.get(key);
     if (list) list.push(v);
     else wanted.set(key, [v]);
   }
+  const storedPaths = [...wanted.keys()];
 
-  const found = await collectHandlesByBasename(dirHandle, new Set(wanted.keys()));
+  const found = await collectHandlesByBasename(
+    dirHandle,
+    new Set(storedPaths.map((p) => getBasename(p).toLowerCase()))
+  );
+  const { matched, cannotTell } = matchStoredPathsToFiles(storedPaths, found);
 
   let count = 0;
-  for (const [key, vids] of wanted) {
-    const handle = found.get(key) as FileSystemFileHandle | undefined;
-    if (!handle) continue;
+  for (const [storedPath, { handle }] of matched) {
     let file: File;
     try {
-      file = await handle.getFile();
+      file = await (handle as FileSystemFileHandle).getFile();
     } catch {
       continue;
     }
-    for (const v of vids) {
+    for (const v of wanted.get(storedPath) ?? []) {
       if (await assignVideoBackend(v, file, { silent: true })) count++;
     }
   }
@@ -1244,7 +1384,21 @@ export async function resolveAllVideosFromFolder(
     );
   }
   const remaining = missing.length - count;
-  if (remaining > 0) {
+  const tooAlike = missing.filter((v) => cannotTell.has(storedPathKey(v))).length;
+  if (tooAlike > 0) {
+    const notFound = remaining - tooAlike;
+    toast.warning(
+      `${remaining} video${remaining > 1 ? "s" : ""} not located`,
+      {
+        description:
+          (notFound > 0 ? `${notFound} not found in that folder. ` : "") +
+          `${tooAlike} could not be told apart: the same file name fits more ` +
+          "than one video or file, and the folder names don't settle which is " +
+          "which. Pick the folder that holds their subfolders, or use Locate on " +
+          "each video's row.",
+      }
+    );
+  } else if (remaining > 0) {
     toast.warning(
       `${remaining} video${remaining > 1 ? "s" : ""} not found in that folder`,
       { description: "Pick a folder that contains the missing video file(s)." }

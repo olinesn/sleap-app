@@ -423,7 +423,7 @@ export function VideosPanel() {
   };
 
   const handleLocateAll = async () => {
-    // Pick ONE folder and match all missing videos by basename (browser,
+    // Pick ONE folder and match all missing videos by name and path (browser,
     // Chromium); falls back to a multi-file picker where showDirectoryPicker is
     // unavailable or on Tauri. Explicit action — never auto-run on project load.
     const count = await resolveAllVideosFromFolder(missingResolvable);
