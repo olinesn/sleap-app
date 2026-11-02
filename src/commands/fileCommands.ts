@@ -5,6 +5,7 @@
  * CSV export, JSON save-as, prediction deletion variants, and package export.
  */
 
+import { flushRunningBehaviors } from "@/lib/behaviorCoding";
 import {
   Labels,
   PredictedInstance,
@@ -439,6 +440,7 @@ export const SaveProjectCommand: Command = {
   async execute(ctx: CommandContext) {
     const { labels, filename } = ctx.state;
     if (!labels) return;
+    flushRunningBehaviors();
     const hint = filename ?? getNewVersionFilename(NEW_PROJECT_VERSION_SEED);
     await saveProjectAsSlp(labels, hint);
   },
@@ -454,6 +456,7 @@ export const SaveAsProjectCommand: Command = {
   async execute(ctx: CommandContext) {
     const { labels, filename } = ctx.state;
     if (!labels) return;
+    flushRunningBehaviors();
     const hint = getNewVersionFilename(filename ?? NEW_PROJECT_VERSION_SEED);
     await saveProjectAsSlp(labels, hint, true);
   },

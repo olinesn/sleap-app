@@ -16,7 +16,7 @@
  * the label tables (+ metadata), which is exactly what the io
  * `checkInPlaceWritable` gate proves before we touch a byte:
  *   - We PROBE the on-disk file (via the read-only range reader) to learn its
- *     label-table layouts and its sidecars (tracks/suggestions/videos/metadata).
+ *     label-table layouts and its sidecars (tracks/suggestions/videos/metadata/events).
  *   - We ask the gate whether the current `labels` differ from the file ONLY in
  *     the label tables. If not (a track/video/metadata/etc. change, or a
  *     Python-written enum-point file h5wasm can't patch), the gate refuses and
@@ -41,6 +41,7 @@ import {
   buildVideoSignatures,
   checkInPlaceWritable,
   onDiskTableFromMeta,
+  readEventSignaturesStreaming,
   StreamingH5File,
   StreamingH5Writer,
   type RangeSink,
@@ -257,6 +258,9 @@ async function probeOnDisk(path: string): Promise<OnDiskProbe> {
       suggestionsJson,
       metadataJson,
       videos: buildOnDiskVideoSignatures(videosJson, path),
+      // Behavior labels: the gate refuses when they changed, because this path does not
+      // rewrite them (the caller then does a full re-save).
+      events: await readEventSignaturesStreaming(reader),
     };
     return { tables, sidecars, size };
   } finally {

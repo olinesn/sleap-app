@@ -14,6 +14,7 @@ Left** moves the column; **Panels ▸ Reset to Defaults…** restores the layout
 | **Instances** | The current frame's instances, with track, type, and score |
 | **View** | Display settings, same as the View menu — [guide](../guides/view.md) |
 | **Suggestions** | Generate and work through frames worth labeling — [guide](../guides/suggestions.md) |
+| **Behavior** | Set up behaviors, code them with keys, review predictions — [guide](../guides/behavior.md) |
 | **Frames** | Every labeled frame in the project, with instance counts and prediction scores |
 | **Training** | Configure and run sleap-nn training — [guide](../guides/training.md) |
 | **Inference** | Configure and run predictions — [guide](../guides/inference.md) |

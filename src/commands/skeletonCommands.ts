@@ -153,6 +153,8 @@ export const AddNodeCommand: Command = {
       videos: labels ? [...labels.videos] : [],
       skeletons: labels ? [...labels.skeletons] : [],
       suggestions: labels ? [...labels.suggestions] : [],
+      eventTypes: labels ? [...labels.eventTypes] : [],
+      events: labels ? [...labels.events] : [],
       selectedIdx: -1,
       activeVideo: ctx.state.video,
       activeFrameIdx: ctx.state.frameIdx,

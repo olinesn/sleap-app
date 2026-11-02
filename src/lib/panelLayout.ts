@@ -23,6 +23,7 @@ export const DEFAULT_PANEL_ORDER = [
   "instances",
   "view",
   "suggestions",
+  "behavior",
   "frames",
   "training",
   "inference",

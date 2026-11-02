@@ -57,6 +57,7 @@ export const DEFAULT_SHORTCUTS: Record<string, string> = {
   "show instances": "KeyH",
   "show labels": "KeyT",
   "show edges": "$mod+Shift+Tab",
+  "label behaviors": "$mod+Shift+KeyL",
   "toggle node visibility": "KeyV",
   "toggle pan mode": "KeyP",
   "toggle place mode": "Shift+KeyN",
